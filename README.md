@@ -24,6 +24,8 @@ Additionally, the plugin tracks costs of the operations performed using the Open
 
 ## Installation
 
+### With a plugin manager 
+
 Use your favorite plugin manager. For example, with `packer`:
 
 ```lua
@@ -45,6 +47,54 @@ With lazy.nvim:
   end
 }
 ```
+
+### Manual install
+
+## Manual Installation
+
+If you prefer not to use any plugin manager, you can manually place the plugin files in your Neovim runtime directory.
+
+1. **Locate Neovim's runtime directory**:  
+   On most systems, the Neovim configuration directory is located at `~/.config/nvim`. Within this directory, you can create a `pack` directory for manual plugin management if it doesn't already exist:
+   ```bash
+   mkdir -p ~/.config/nvim/pack/manual/start
+   ```
+
+2. **Clone or Copy the Auctor Plugin**:  
+   Place the `auctor.nvim` folder (with its `plugin` and `lua` subdirectories) into:
+   ```bash
+   ~/.config/nvim/pack/manual/start/auctor.nvim
+   ```
+
+   After this step, your directory structure might look like:
+   ```
+   ~/.config/nvim/pack/manual/start/auctor.nvim/ 
+   ├── plugin/ 
+   │   └── auctor.lua 
+   └── lua/ 
+       └── auctor/ 
+           ├─ init.lua 
+           ├─ config.lua 
+           ├─ util.lua 
+           ├─ api.lua 
+           └─ commands.lua
+   ```
+
+3. **Restart Neovim**:  
+Once the files are in place, restart Neovim. The plugin should be automatically loaded. If the plugin does not load as expected, ensure that:
+- The directory structure is correct.
+- You have `pack` support (Neovim 0.5+ includes this by default).
+
+4. **Verify Installation**:  
+Run `:help auctor`, or check that the `:AuctorUpdate`, `:AuctorAdd`, and `:AuctorAutoAddToggle` commands are available. If they are, the plugin is installed successfully.
+
+5. **Configuration**:  
+Before invoking the plugin commands, set necessary global variables in your `init.lua` or `init.vim`. For example:
+```lua
+vim.g.auctor_api_key = "sk-..."
+vim.g.auctor_instruction_marker = "|||"
+```
+Afterwards, you can use the plugin as described in the main documentation.
 
 ## Configuration
 
