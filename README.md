@@ -46,7 +46,7 @@ With lazy.nvim:
 }
 ```
 
-Configuration
+## Configuration
 
 Set the following global variables before requiring the plugin (e.g. in your init.lua):
 
@@ -65,7 +65,7 @@ vim.g.auctor_prefix_prompt_func = function(filepath, filename, filetype, relpath
   return "Please just store this file's content in your memory. No changes needed.\nFile: " .. filename
 end
 
-Usage
+## Usage
 
 1. Set API Key:
 
@@ -98,7 +98,7 @@ To enable or disable automatic upload on opening files:
 :AuctorAutoAddToggle
 ```
 
-# Key Mappings
+## Key Mappings
 
 You can map these commands in your init.lua or Vim script:
 
@@ -116,7 +116,7 @@ vim.api.nvim_set_keymap('n', '<leader>at', ':AuctorAutoAddToggle<CR>', { noremap
 vim.api.nvim_set_keymap('n', '<leader>ic', ':lua vim.fn.append(vim.fn.line("."), vim.g.auctor_instruction_marker .. " ")<CR>jA', { noremap = true, silent = true })
 ```
 
-# Notes
+## Notes
 
 Make sure you have curl and jq (if necessary) installed, as this plugin uses curl to interact with the OpenAI API.
 Costs displayed assume GPT-3.5-turbo pricing. If you change models, adjust the cost calculation in util.lua accordingly.
