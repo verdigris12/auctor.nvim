@@ -13,6 +13,11 @@ function M.setup_commands()
   vim.api.nvim_create_user_command('AuctorAutoAddToggle', function()
     api.auctor_auto_add_toggle()
   end, {})
+
+  vim.api.nvim_create_user_command('AuctorSelect', function()
+    api.auctor_select()
+  end, {})
+
 end
 
 function M.setup_autocmds()

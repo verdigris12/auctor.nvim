@@ -24,24 +24,47 @@ function M.get_visual_selection()
   return table.concat(lines, "\n")
 end
 
+
 function M.replace_visual_selection(new_text)
+  local buf = vim.api.nvim_get_current_buf()
+
   local _, ls, cs = unpack(vim.fn.getpos("'<"))
   local _, le, ce = unpack(vim.fn.getpos("'>"))
 
-  local start_line = ls
-  local start_col = cs
-  local end_line = le
-  local end_col = ce
+  -- Convert to zero-based indices
+  local start_line = ls - 1
+  local start_col = cs - 1
+  local end_line = le - 1
+  local end_col = ce - 1
 
-  local buf = vim.api.nvim_get_current_buf()
-
-  -- Convert new_text into a list of lines, as required by nvim_buf_set_text
-  local lines = {}
-  for line in string.gmatch(new_text, "([^\n]*)\n?") do
-    table.insert(lines, line)
+  -- Normalize line/col ranges
+  if end_line < start_line then
+    start_line, end_line = end_line, start_line
+  end
+  if end_line == start_line and end_col < start_col then
+    start_col, end_col = end_col, start_col
   end
 
-  vim.api.nvim_buf_set_text(buf, start_line - 1, start_col - 1, end_line - 1, end_col, lines)
+  -- Get lines from buffer to validate column indices
+  local lines = vim.api.nvim_buf_get_lines(buf, start_line, end_line + 1, false)
+  if #lines == 0 then
+    -- No lines selected, just return
+    return
+  end
+
+  -- Clamp end_col if it exceeds the line length
+  local last_line_len = #lines[#lines]
+  if end_col > last_line_len then
+    end_col = last_line_len
+  end
+
+  -- Convert new_text into a list of lines
+  local new_lines = {}
+  for line in string.gmatch(new_text, "([^\n]*)\n?") do
+    table.insert(new_lines, line)
+  end
+
+  vim.api.nvim_buf_set_text(buf, start_line, start_col, end_line, end_col, new_lines)
 end
 
 -- Function to call OpenAI API. Returns the response table or nil, err
@@ -82,16 +105,16 @@ function M.call_openai(messages, model, temperature)
   return resp, nil
 end
 
--- Calculate cost based on usage. Using GPT-3.5-turbo token prices:
--- prompt_tokens: $0.0015 / 1K tokens
--- completion_tokens: $0.002 / 1K tokens
+-- Calculate cost based on usage. Using GPT-4o:
+-- prompt_tokens: $0.0025 / 1K tokens
+-- completion_tokens: $0.01 / 1K tokens
 function M.calculate_cost(usage, model)
   local prompt_tokens = usage.prompt_tokens or 0
   local completion_tokens = usage.completion_tokens or 0
 
   local cost = 0
-  if model == "gpt-3.5-turbo" then
-    cost = (prompt_tokens * 0.0015/1000) + (completion_tokens * 0.002/1000)
+  if model == "gpt-4o" then
+    cost = (prompt_tokens * 0.0025/1000) + (completion_tokens * 0.01/1000)
   else
     -- Default fallback if other models are used, adjust or add conditions as needed.
     cost = (prompt_tokens + completion_tokens) * 0.002/1000
