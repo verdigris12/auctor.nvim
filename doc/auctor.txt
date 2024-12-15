@@ -1,0 +1,135 @@
+*auctor.txt*                 Auctor Plugin Documentation              -*- text -*-
+
+AUTHOR: Your Name <your.email@example.com>
+
+==============================================================================
+CONTENTS                                                    *auctor-contents*
+
+1. Introduction.......................|auctor-intro|
+2. Installation.......................|auctor-install|
+3. Configuration......................|auctor-config|
+4. Commands...........................|auctor-commands|
+5. Key Mappings.......................|auctor-keymaps|
+6. Global Variables...................|auctor-globals|
+7. Cost and Pricing...................|auctor-cost|
+8. Automatic Upload...................|auctor-auto-add|
+
+==============================================================================
+1. Introduction                                           *auctor-intro*
+
+Auctor is a Neovim plugin that integrates with various AI coding assistants 
+(e.g., OpenAI, Anthropic, Hugging Face, Ollama) to transform selected code 
+snippets or entire buffers. It can send data to the AI API and optionally 
+replace the text in your buffer with the response.
+
+==============================================================================
+2. Installation                                            *auctor-install*
+
+Use a plugin manager or install manually.
+
+- Using a plugin manager (e.g. packer):
+
+    ```lua
+    use {
+      'path/to/auctor.nvim',
+      config = function()
+        -- optional configuration
+      end
+    }
+    ```
+
+- Manual Installation:
+  Place the `auctor.nvim` directory into:
+  `~/.config/nvim/pack/manual/start/auctor.nvim`
+
+  For more details, see the plugin's README.
+
+Once installed, restart Neovim and run:
+    :helptags /path/to/auctor.nvim/doc/
+to generate the help tags, then:
+    :help auctor
+
+==============================================================================
+3. Configuration                                           *auctor-config*
+
+Before using Auctor, ensure that:
+- `vim.g.auctor_api_key` is set to your API key if required by your provider.
+- `vim.g.auctor_provider` is set to one of `"openai"`, `"anthropic"`, 
+  `"huggingface"`, or `"ollama"` depending on your AI provider.
+
+You can set these in your `init.lua` or `init.vim`:
+    ```lua
+    vim.g.auctor_api_key = "sk-..."
+    vim.g.auctor_provider = "openai"
+    ```
+
+For full details and defaults of global variables, see |auctor-globals|.
+
+==============================================================================
+4. Commands                                                *auctor-commands*
+
+:AuctorUpdate
+    Sends the currently selected text (visual selection) to the configured 
+    AI provider. On the first call per session, a special prompt is prepended.
+    The selection is replaced with the returned text, formatted as a code block.
+    Also prints cost information (if available).
+
+:AuctorAdd
+    Sends the entire current buffer to the AI provider along with a prefix prompt. 
+    Does not replace or modify the buffer. Prints cost information.
+
+:AuctorAutoAddToggle
+    Toggles a mode that automatically calls :AuctorAdd on every new buffer/file 
+    opened.
+
+==============================================================================
+5. Key Mappings                                             *auctor-keymaps*
+
+Here are example key mappings (place in your `init.lua`):
+
+```lua
+-- AuctorUpdate on selected text
+vim.api.nvim_set_keymap('v', '<leader>au', ':AuctorUpdate<CR>', { noremap = true, silent = true })
+
+-- AuctorAdd current buffer
+vim.api.nvim_set_keymap('n', '<leader>aa', ':AuctorAdd<CR>', { noremap = true, silent = true })
+
+-- Toggle auto add
+vim.api.nvim_set_keymap('n', '<leader>at', ':AuctorAutoAddToggle<CR>', { noremap = true, silent = true })
+
+-- Insert a comment line starting with instruction marker
+vim.api.nvim_set_keymap('n', '<leader>ic', ':lua vim.fn.append(vim.fn.line("."), vim.g.auctor_instruction_marker .. " ")<CR>jA', { noremap = true, silent = true })
+```
+
+==============================================================================
+6. Global Variables                                         *auctor-globals*
+
+| Global Variable                | Description                                      | Default                         |
+|--------------------------------|--------------------------------------------------|---------------------------------|
+| vim.g.auctor_api_key           | The API key for your provider.                   | None                            |
+| vim.g.auctor_provider          | Provider: "openai", "anthropic", "huggingface", "ollama" | "openai"               |
+| vim.g.auctor_prompt            | Initial prompt for first AuctorUpdate call.       | "Replace text according to..."  |
+| vim.g.auctor_model             | Model name to use (if applicable).               | "gpt-3.5-turbo" (for openai)    |
+| vim.g.auctor_temperature       | Temperature for generation.                      | 0.7                             |
+| vim.g.auctor_auto_add          | Bool: auto run AuctorAdd on new buffer.          | false                           |
+| vim.g.auctor_prefix_prompt_func| Lua function returning prefix prompt.            | Built-in default                |
+| vim.g.auctor_instruction_marker| Marker used for instructions in comments.        | "|||"                           |
+
+To override defaults, set these variables in `init.lua`.
+
+==============================================================================
+7. Cost and Pricing                                           *auctor-cost*
+
+When using OpenAI, Auctor attempts to calculate the cost of each request 
+using known token prices. For other providers, cost calculation is not yet 
+implemented and will show as zero or unknown.
+
+==============================================================================
+8. Automatic Upload                                           *auctor-auto-add*
+
+If `vim.g.auctor_auto_add` is set to `true` or toggled on using 
+`:AuctorAutoAddToggle`, the plugin will automatically send the buffer to the 
+provider on every new file or buffer open.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
