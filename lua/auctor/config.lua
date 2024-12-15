@@ -32,6 +32,10 @@ if vim.g.auctor_auto_add == nil then
   vim.g.auctor_auto_add = false
 end
 
+if vim.g.auctor_instruction_marker == nil then
+  vim.g.auctor_instruction_marker = "|||"
+end
+
 -- Default prefix prompt function if not overridden by the user.
 -- The user can override vim.g.auctor_prefix_prompt_func to a Lua function reference that returns a string.
 -- Arguments: filepath, filename, filetype, relative_path

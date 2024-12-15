@@ -28,7 +28,7 @@ Use your favorite plugin manager. For example, with `packer`:
 
 ```lua
 use {
-  'path/to/auctor.nvim',
+  'verdigris12/auctor.nvim',
   config = function()
     -- No special config needed unless you want to set globals
   end
@@ -37,9 +37,9 @@ use {
 
 With lazy.nvim:
 
-```
+```lua
 {
-  'path/to/auctor.nvim',
+  'verdigris12/auctor.nvim',
   config = function()
     -- set configs here if needed
   end
@@ -111,6 +111,9 @@ vim.api.nvim_set_keymap('n', '<leader>aa', ':AuctorAdd<CR>', { noremap = true, s
 
 -- Toggle auto add
 vim.api.nvim_set_keymap('n', '<leader>at', ':AuctorAutoAddToggle<CR>', { noremap = true, silent = true })
+
+-- Start instruction
+vim.api.nvim_set_keymap('n', '<leader>ic', ':lua vim.fn.append(vim.fn.line("."), vim.g.auctor_instruction_marker .. " ")<CR>jA', { noremap = true, silent = true })
 ```
 
 # Notes
