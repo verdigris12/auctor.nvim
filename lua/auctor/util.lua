@@ -34,21 +34,14 @@ function M.replace_visual_selection(new_text)
   local end_col = ce
 
   local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, start_line-1, end_line, false)
-  if #lines == 0 then
-    return
+
+  -- Convert new_text into a list of lines, as required by nvim_buf_set_text
+  local lines = {}
+  for line in string.gmatch(new_text, "([^\n]*)\n?") do
+    table.insert(lines, line)
   end
 
-  lines[#lines] = lines[#lines]:sub(1, end_col)
-  lines[1] = lines[1]:sub(1, start_col-1) .. new_text .. lines[#lines]:sub(end_col+1)
-  if #lines > 1 then
-    for i = 2, #lines do
-      lines[i] = nil
-    end
-  end
-
-  -- It's simpler to just do a normal replacement:
-  vim.api.nvim_buf_set_text(buf, start_line-1, start_col-1, end_line-1, end_col, {new_text})
+  vim.api.nvim_buf_set_text(buf, start_line - 1, start_col - 1, end_line - 1, end_col, lines)
 end
 
 -- Function to call OpenAI API. Returns the response table or nil, err
@@ -67,7 +60,7 @@ function M.call_openai(messages, model, temperature)
   local json_str = vim.fn.json_encode(request_body)
 
   local cmd = {
-    "curl", 
+    "curl",
     "-s",
     "-X", "POST",
     "https://api.openai.com/v1/chat/completions",
