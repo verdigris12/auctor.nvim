@@ -288,39 +288,71 @@ end
 -- 2. Moves cursor to that line, puts user into insert mode after the marker
 --------------------------------------------------------------------------------
 function M.auctor_insert()
-  -- Use a global marker if defined, else a default string:
-  local marker = vim.g.auctor_instruction_marker or "Auctor Instruction"
+  -- We'll try to load nvim-comment
+  local has_nvim_comment, nvim_comment = pcall(require, 'nvim_comment')
 
-  -- If commentstring is nil or empty, default to "// %s"
-  local cstring = vim.bo.commentstring
-  if not cstring or cstring == "" then
-    cstring = "// %s"
-  end
+  -- We'll use this marker text if we're falling back or want something appended
+  local marker_text = vim.g.auctor_instruction_marker
 
-  -- If the commentstring contains '%s', substitute our marker there
-  if cstring:find("%%s") then
-    -- Add a trailing space so user can start typing right away
-    cstring = cstring:gsub("%%s", marker .. " ")
+  -- Get the current buffer and cursor position
+  local buf = vim.api.nvim_get_current_buf()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+
+  if has_nvim_comment then
+    ----------------------------------------------------------------------------
+    -- If nvim-comment is installed, we:
+    --   1. Insert a new, blank line below the current line
+    --   2. Move the cursor to that line
+    --   3. Toggle a line comment there
+    --   4. Append our marker text
+    --   5. Place the cursor in insert mode
+    ----------------------------------------------------------------------------
+
+    -- Insert a blank line at the current row (so it appears *below* the cursor)
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { "" })
+    -- Move cursor to that newly inserted line
+    vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
+
+    -- Toggle linewise comment on it (so it’s now a comment line)
+    nvim_comment.comment_toggle_linewise_op()
+
+    -- Now, put our marker text at the end
+    local commented_line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+    commented_line = commented_line .. " " .. marker_text .. " "
+    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { commented_line })
+
+    -- Move the cursor after our inserted text
+    vim.api.nvim_win_set_cursor(0, { row + 1, #commented_line })
+    -- Enter insert mode
+    vim.cmd("startinsert")
+
   else
-    -- Otherwise, just append our marker text to the end
-    cstring = cstring .. " " .. marker .. " "
+    ----------------------------------------------------------------------------
+    -- Fallback if nvim-comment is NOT installed
+    --   1. Build the comment from vim.bo.commentstring if available, else "// %s"
+    --   2. Insert a new line below the current line
+    --   3. Place the cursor in insert mode after the marker
+    ----------------------------------------------------------------------------
+
+    local cstring = vim.bo.commentstring
+    if not cstring or cstring == "" then
+      cstring = "// %s"
+    end
+
+    if cstring:find("%%s") then
+      cstring = cstring:gsub("%%s", marker_text .. " ")
+    else
+      cstring = cstring .. " " .. marker_text .. " "
+    end
+
+    -- Insert a line below the cursor
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { cstring })
+    -- Move cursor to newly inserted line
+    vim.api.nvim_win_set_cursor(0, { row + 1, #cstring })
+    -- Enter insert mode
+    vim.cmd("startinsert")
   end
-
-  -- Get current cursor location (1-based row, 0-based col)
-  local row, _ = unpack(vim.api.nvim_win_get_cursor(0))
-  -- Insert a line at the current row. (Because of how set_lines works,
-  -- inserting at `row, row` means we place a new line *below* the current one.)
-  vim.api.nvim_buf_set_lines(0, row, row, false, { cstring })
-
-  -- Move the cursor to the newly inserted line. Remember that nvim_win_set_cursor
-  -- uses 1-based line indexing, so the new line is at row+1.
-  -- The column is #cstring, so the user ends up right after the inserted text.
-  vim.api.nvim_win_set_cursor(0, { row + 1, #cstring })
-
-  -- Finally, switch to insert mode
-  vim.cmd("startinsert")
 end
-
 
 --------------------------------------------------------------------------------
 -- Auctor Select
