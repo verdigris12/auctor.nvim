@@ -1,173 +1,141 @@
-# Auctor.nvim
+# Auctor
 
-Auctor is a Neovim plugin written in Lua that integrates with the OpenAI API to transform your code or text on the fly using AI completions. It provides two main commands:
+Auctor is a neovim LLM plugin for updating code based on comments.
 
-1. `:AuctorUpdate`: Sends the visually selected text to OpenAI and replaces it with a transformed version as a code block.
-2. `:AuctorAdd`: Uploads the current buffer to OpenAI for analysis without returning the transformed text.
+## Usage 
 
-Additionally, the plugin tracks costs of the operations performed using the OpenAI API and reports them after each call.
+Select text and execute `:AuctorUpdate`. 
+The selected text will be transformed according to the comments starting with `vim.g.auctor_instruction_marker` (by default `|||`).
 
-## Features
+### Example
 
-- **AuctorUpdate**:
-  - Sends the currently selected text (in visual mode) to OpenAI.
-  - On the very first call per session, a system prompt (default: `Replace text according to comments`) is prepended.
-  - Replaces the selected text with the result wrapped in ``` code fences ```.
-  - Prints cost spent on the last transaction and the total cost spent in the current session.
+This goes in
 
-- **AuctorAdd**:
-  - Uploads the entire current buffer to OpenAI with a prefix prompt.
-  - Does not replace or return text, just logs cost.
-  
-- **AuctorAutoAddToggle**:
-  - Toggles a mode that automatically calls `AuctorAdd` for each new buffer opened or file read.
+```c
+int main() {
+    /*||| calculate the first five fibbonacci numbers*/
+	return -1;
+}
+```
+
+and this comes out
+
+```c
+#include <stdio.h>
+
+int main() {
+    int fib[5]; // Array to store the first five Fibonacci numbers
+    fib[0] = 0; // First Fibonacci number
+    fib[1] = 1; // Second Fibonacci number
+
+    // Calculate the next three Fibonacci numbers
+    for (int i = 2; i < 5; i++) {
+        fib[i] = fib[i - 1] + fib[i - 2];
+    }
+
+    // Print the first five Fibonacci numbers
+    for (int i = 0; i < 5; i++) {
+        printf("%d ", fib[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Uploading entire file
+
+If you want LLM to have your entire file as a context execute `:AuctorAdd` to send the current buffer and the path to its file.
+This will not alter any text, but will give LLM an idea about your code structure.
+
+### Creating instruction comments with one command
+
+It is convenient to insert instructions with a keybind. Map `AuctorInsert` for that:
+
+```lua
+vim.api.nvim_set_keymap('n', '<leader>ai', ':AuctorInsert<CR>', { noremap = true, silent = true })
+```
+
+This will start a new line with an instruction comment and will drop you into the insert mode.
+
+
+## Requirements
+
+- **Neovim** 0.7+ (due to async job usage).  
+- **curl** must be available in your `$PATH`, as the plugin invokes `curl` to contact OpenAI’s API.  
+- Optionally, **[nvim-notify](https://github.com/rcarriga/nvim-notify)** for better notifications.  
+- Optionally, **[nvim-comment](https://github.com/terrortylor/nvim-comment)** for smoother `AuctorInsert`
 
 ## Installation
 
-### With a plugin manager 
 
-Use your favorite plugin manager. For example, with `packer`:
+### Packer
 
 ```lua
-use {
-  'verdigris12/auctor.nvim',
-  config = function()
-    -- No special config needed unless you want to set globals
-  end
-}
+use("verdigris12/auctor.nvim")
 ```
 
-With lazy.nvim:
+### lazy.nvim:
 
 ```lua
 {
-  'verdigris12/auctor.nvim',
+  "verdigris12/auctor.nvim",
   config = function()
-    -- set configs here if needed
+    require("auctor").setup()
   end
 }
 ```
 
-### Manual install
-
-## Manual Installation
-
-If you prefer not to use any plugin manager, you can manually place the plugin files in your Neovim runtime directory.
-
-1. **Locate Neovim's runtime directory**:  
-   On most systems, the Neovim configuration directory is located at `~/.config/nvim`. Within this directory, you can create a `pack` directory for manual plugin management if it doesn't already exist:
-   ```bash
-   mkdir -p ~/.config/nvim/pack/manual/start
-   ```
-
-2. **Clone or Copy the Auctor Plugin**:  
-   Place the `auctor.nvim` folder (with its `plugin` and `lua` subdirectories) into:
-   ```bash
-   ~/.config/nvim/pack/manual/start/auctor.nvim
-   ```
-
-   After this step, your directory structure might look like:
-   ```
-   ~/.config/nvim/pack/manual/start/auctor.nvim/ 
-   ├── plugin/ 
-   │   └── auctor.lua 
-   └── lua/ 
-       └── auctor/ 
-           ├─ init.lua 
-           ├─ config.lua 
-           ├─ util.lua 
-           ├─ api.lua 
-           └─ commands.lua
-   ```
-
-3. **Restart Neovim**:  
-Once the files are in place, restart Neovim. The plugin should be automatically loaded. If the plugin does not load as expected, ensure that:
-- The directory structure is correct.
-- You have `pack` support (Neovim 0.5+ includes this by default).
-
-4. **Verify Installation**:  
-Run `:help auctor`, or check that the `:AuctorUpdate`, `:AuctorAdd`, and `:AuctorAutoAddToggle` commands are available. If they are, the plugin is installed successfully.
-
-5. **Configuration**:  
-Before invoking the plugin commands, set necessary global variables in your `init.lua` or `init.vim`. For example:
-```lua
-vim.g.auctor_api_key = "sk-..."
-vim.g.auctor_instruction_marker = "|||"
-```
-Afterwards, you can use the plugin as described in the main documentation.
-
 ## Configuration
 
-Set the following global variables before requiring the plugin (e.g. in your init.lua):
+Auctor uses some global variables to manage configuration:
 
-| Global Variable                  | Description                                                                                                                                                          | Default                                      |
-|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
-| `vim.g.auctor_api_key`           | The OpenAI API key. If not set, will check `OPENAI_API_KEY` environment variable. If neither is set, commands will error out.                                          | *None*                                       |
-| `vim.g.auctor_prompt`            | The system prompt for the first `AuctorUpdate` call in a session.                                                                                                     | `"Replace text according to comments"`       |
-| `vim.g.auctor_model`             | The OpenAI model to use.                                                                                                                                             | `"gpt-3.5-turbo"`                            |
-| `vim.g.auctor_temperature`       | The temperature setting for the OpenAI completion.                                                                                                                   | `0.7`                                        |
-| `vim.g.auctor_auto_add`          | A boolean flag indicating whether `AuctorAdd` should be automatically called for each new buffer. Toggle using `:AuctorAutoAddToggle`.                                | `false`                                      |
-| `vim.g.auctor_prefix_prompt_func`| A Lua function that returns a prefix prompt string given (filepath, filename, filetype, relpath). By default, it provides file context without requesting a transform. | Provided default function (see README above) |
+- `vim.g.auctor_api_key`  
+  - OpenAI API key. If not set, the plugin looks in the environment variable `OPENAI_API_KEY`. 
+- `vim.g.auctor_model`  
+  - The model to use, e.g. `"gpt-4"` or `"gpt-3.5-turbo"`. Defaults to `"gpt-4o"`.  
+- `vim.g.auctor_prompt_func`  
+  - A Lua function returning a string. This string is used for the system-level instruction on the **first** call of `AuctorUpdate`.  
+- `vim.g.auctor_temperature`  
+  - The OpenAI temperature, defaults to `0.7`.  
+- `vim.g.auctor_update_prompt`  
+  - Prepend to updates. By default, it includes logic about an `INSTRUCTION_MARKER`.  
+- `vim.g.auctor_add_prompt`  
+  - Prepend to the content when calling `AuctorAdd`.  
+- `vim.g.auctor_auto_add`  
+  - Boolean toggle to automatically call `AuctorAdd` on buffer read or new file creation. Default is `false`.  
+- `vim.g.auctor_instruction_marker`  
+  - Default is `"|||"`. Used in `AuctorInsert` to create special comment lines.  
 
-You can override this function to tailor the prompt:
+All defaults are set in **config.lua**.
 
-vim.g.auctor_prefix_prompt_func = function(filepath, filename, filetype, relpath)
-  return "Please just store this file's content in your memory. No changes needed.\nFile: " .. filename
-end
-
-## Usage
-
-1. Set API Key:
+### Example
 
 ```lua
-vim.g.auctor_api_key = "sk-...."  -- or set environment variable OPENAI_API_KEY
+vim.g.auctor_api_key = "YOUR_OPENAI_API_KEY_HERE"
+vim.g.auctor_model = "gpt-3.5-turbo"
+vim.g.auctor_auto_add = true
+vim.g.auctor_instruction_marker = "|||"
 ```
 
-2. Select Text and Transform:
+## Commands
 
-   * Enter visual mode (e.g. v), select some code or text, then run:
+- `:AuctorUpdate` (Visual-range command)  
+  - Sends selected text to the AI for modification or guidance.  
+- `:AuctorAdd`  
+  - "Uploads" the current buffer to the AI for context in future calls.  
+- `:AuctorAutoAddToggle`  
+  - Toggles whether new buffers will automatically call `AuctorAdd`.  
+- `:AuctorSelect`  
+  - Prompts you for a model name and sets `vim.g.auctor_model`.  
+- `:AuctorInsert`  
+  - Inserts an instruction line (comment) in your file. If [nvim-comment](https://github.com/terrortylor/nvim-comment) is installed, it uses that to format the comment.  
 
-```
-:AuctorUpdate
-```
+## Frequently asked questions
 
-    The selected text will be replaced with the completion result, formatted as a code block.
+* Does it support other APIs?
 
-3. Upload File Content:
+No. This is made for personal use, and so far I'm okay with 4o. Pull requests are welcome, of course.
 
-To simply upload the current buffer content without modifying it:
-```
-:AuctorAdd
-```
-This sends the data to OpenAI and logs the cost.
-
-4. Toggle Auto Add:
-
-To enable or disable automatic upload on opening files:
-```
-:AuctorAutoAddToggle
-```
-
-## Key Mappings
-
-You can map these commands in your init.lua or Vim script:
-
-``` lua
--- AuctorUpdate on selected text (visual mode)
-vim.api.nvim_set_keymap('v', '<leader>au', ':AuctorUpdate<CR>', { noremap = true, silent = true })
-
--- AuctorAdd current buffer
-vim.api.nvim_set_keymap('n', '<leader>aa', ':AuctorAdd<CR>', { noremap = true, silent = true })
-
--- Toggle auto add
-vim.api.nvim_set_keymap('n', '<leader>at', ':AuctorAutoAddToggle<CR>', { noremap = true, silent = true })
-
--- Start instruction
-vim.api.nvim_set_keymap('n', '<leader>ic', ':lua vim.fn.append(vim.fn.line("."), vim.g.auctor_instruction_marker .. " ")<CR>jA', { noremap = true, silent = true })
-```
-
-## Notes
-
-Make sure you have curl and jq (if necessary) installed, as this plugin uses curl to interact with the OpenAI API.
-Costs displayed assume GPT-3.5-turbo pricing. If you change models, adjust the cost calculation in util.lua accordingly.
-The code block formatting added around the response can be adjusted in api.lua if needed.
+* Does this work with [molten](https://github.com/benlubas/molten-nvim)/[quarto](https://github.com/quarto-dev/quarto-nvim)?
+Oh hell yes.
