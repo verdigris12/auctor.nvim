@@ -53,7 +53,9 @@ local notify_timer = nil
 local notify_spinner_index = 1
 local notify_spinner_notif_id = nil
 
-local function start_notify_spinner(title_msg)
+--- Start spinner using nvim-notify. The "body_msg" is the main message,
+--- while each frame of the spinner goes in the "title".
+local function start_notify_spinner(body_msg)
   if notify_timer then
     notify_timer:stop()
     notify_timer:close()
@@ -62,6 +64,7 @@ local function start_notify_spinner(title_msg)
   notify_spinner_index = 1
   notify_spinner_notif_id = nil
 
+  -- Repeatedly update the title with the next spinner frame
   notify_timer = vim.loop.new_timer()
   notify_timer:start(0, 100, function()
     local frame = spinner_frames[notify_spinner_index]
@@ -72,12 +75,14 @@ local function start_notify_spinner(title_msg)
       if notify_spinner_notif_id then
         opts.replace = notify_spinner_notif_id
       else
-        opts.title = title_msg
         opts.timeout = false
       end
 
+      -- The spinner is shown in the title
+      opts.title = frame .. " Auctor"
+
       local new_notif = notify(
-        frame .. " Auctor",  -- message
+        body_msg,   -- The body of the notification
         "info",
         opts
       )
@@ -86,7 +91,9 @@ local function start_notify_spinner(title_msg)
   end)
 end
 
--- Note the corrected order: notify(message, level, { title = ... })
+--- Stop spinner and replace it with a final title and body (message).
+--- final_title -> goes in opts.title
+--- final_message -> is the body
 local function stop_notify_spinner(final_title, final_message)
   if notify_timer then
     notify_timer:stop()
@@ -97,10 +104,10 @@ local function stop_notify_spinner(final_title, final_message)
   if notify_spinner_notif_id then
     vim.schedule(function()
       notify(
-        final_message,   -- the *message* we want to show
+        final_message,  -- body
         "info",
         {
-          title = final_title,  -- shown as the "header"
+          title = final_title,
           replace = notify_spinner_notif_id,
           timeout = 3000
         }
@@ -113,29 +120,29 @@ end
 --------------------------------------------------------------------------------
 -- Spinner or notify helper
 --------------------------------------------------------------------------------
-local function start_spinner_or_notify(title_msg, fallback_msg)
+
+--- Begin spinner or fallback in cmdline.
+--- @param msg string The body message for the notification or fallback print
+--- @param fallback_msg string The message to print if notify isn't available
+local function start_spinner_or_notify(msg, fallback_msg)
   if has_notify then
-    start_notify_spinner(title_msg)
+    start_notify_spinner(msg)
   else
-    -- Fallback spinner in cmdline
     print(fallback_msg)
     start_cmdline_spinner()
   end
 end
 
--- Here we rename the parameters for clarity:
--- 'title' = nvim-notify "title" 
--- 'message' = text displayed in nvim-notify's main field or fallback print
-local function stop_spinner_or_notify(title, message)
+--- End spinner or fallback, showing a final title and body.
+--- @param final_title string Title for the final notification
+--- @param final_message string Body for the final notification (or print)
+local function stop_spinner_or_notify(final_title, final_message)
   if has_notify then
-    stop_notify_spinner(title, message)
+    stop_notify_spinner(final_title, final_message)
   else
-    -- Stop the spinner first
     stop_cmdline_spinner()
-
-    -- Schedule the final print so it appears after the spinner is cleared
     vim.schedule(function()
-      print(message)
+      print(final_message)
     end)
   end
 end
@@ -184,7 +191,7 @@ function M.auctor_update()
 
   table.insert(messages, {role="user", content=user_content})
 
-  -- Start spinner/notify
+  -- Start spinner or fallback (the "body" of the notification, if available)
   start_spinner_or_notify("Updating selection...", "Auctor: Updating selection...")
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
@@ -219,13 +226,13 @@ function M.auctor_update()
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
+
     local result_message = string.format(
       "Selection updated. This transaction: $%.6f. This session: $%.6f",
       cost,
       _G.auctor_session_total_cost
     )
 
-    -- Stop spinner/notify
     stop_spinner_or_notify("Auctor", result_message)
   end)
 end
@@ -262,8 +269,10 @@ function M.auctor_add()
     {role="user", content=user_content}
   }
 
-  -- Start spinner/notify
-  start_spinner_or_notify("Uploading " .. filename .. "...", "Auctor: Uploading " .. filename .. "...")
+  start_spinner_or_notify(
+    "Uploading " .. filename .. "...",
+    "Auctor: Uploading " .. filename .. "..."
+  )
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
     if err then
@@ -274,13 +283,13 @@ function M.auctor_add()
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
+
     local result_message = string.format(
       "File uploaded. This transaction: $%.6f. This session: $%.6f",
       cost,
       _G.auctor_session_total_cost
     )
 
-    -- Stop spinner/notify
     stop_spinner_or_notify("Auctor", result_message)
   end)
 end
@@ -373,4 +382,3 @@ function M.auto_add_if_enabled()
 end
 
 return M
-
