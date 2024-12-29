@@ -116,17 +116,24 @@ local function start_spinner_or_notify(title_msg, fallback_msg)
   if has_notify then
     start_notify_spinner(title_msg)
   else
+    -- Fallback spinner in cmdline
     print(fallback_msg)
     start_cmdline_spinner()
   end
 end
 
+-- Use vim.schedule for the final print so it doesn't get overwritten.
 local function stop_spinner_or_notify(success_title, success_msg)
   if has_notify then
     stop_notify_spinner(success_title, success_msg)
   else
+    -- Stop the spinner first
     stop_cmdline_spinner()
-    print(success_msg)
+
+    -- Schedule the final print so it appears after the spinner is cleared
+    vim.schedule(function()
+      print(success_msg)
+    end)
   end
 end
 
@@ -138,8 +145,7 @@ local M = {}
 --------------------------------------------------------------------------------
 -- Auctor Update
 -- Prepend if available: vim.g.auctor_update_prompt
--- Then: FILETYPE: ...
---       FILENAME: ...
+-- Then: FILEPATH: ...
 -- Then wrap selected text in a code block
 --------------------------------------------------------------------------------
 function M.auctor_update()
@@ -190,40 +196,43 @@ function M.auctor_update()
 
     local content = resp.choices[1].message.content or ""
 
-    -- Stop spinner/notify
-    stop_spinner_or_notify("Auctor", "Selection updated")
 
-    -- Remove the first and last occurrences of ``` if present
-    local first = content:find("```", 1, true)
-    if first then
-      local lastPos = nil
-      local startPos = 1
-      while true do
-        local found = content:find("```", startPos, true)
-        if not found then break end
-        lastPos = found
-        startPos = found + 3
+    ---------------------------------------------------------------------------
+    -- Remove lines containing triple backticks, rather than partial substring
+    ---------------------------------------------------------------------------
+    do
+      local lines = {}
+      for line in content:gmatch("([^\n]*)\n?") do
+        table.insert(lines, line)
       end
-      if lastPos and lastPos ~= first then
-        content = content:sub(1, lastPos - 1) .. content:sub(lastPos + 3)
+
+      local new_lines = {}
+      for _, line in ipairs(lines) do
+        -- Only keep lines that do NOT contain ```
+        if not line:find("```", 1, true) then
+          table.insert(new_lines, line)
+        end
       end
-      content = content:sub(1, first - 1) .. content:sub(first + 3)
+
+      content = table.concat(new_lines, "\n")
     end
 
     util.replace_visual_selection(content)
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-    print(string.format("Auctor: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+    result_message = string.format("Selection updated. This transaction: $%.6f. This session: $%.6f", cost, _G.auctor_session_total_cost)
+
+    -- Stop spinner/notify
+    stop_spinner_or_notify("Auctor", result_message)
   end)
 end
 
 --------------------------------------------------------------------------------
 -- Auctor Add
 -- Prepend vim.g.auctor_update_prompt (if available)
--- Then: FILETYPE: ...
---       FILENAME: ...
--- Then wrap file content in a code block
+-- Then: FILEPATH: ...
+-- Wrap file content in a code block
 --------------------------------------------------------------------------------
 function M.auctor_add()
   local api_key = util.get_api_key()
@@ -264,14 +273,54 @@ function M.auctor_add()
       return
     end
 
-    -- Stop spinner/notify
-    stop_spinner_or_notify("Auctor", "File uploaded")
-
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-    print(string.format("AuctorAdd: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+    result_message = string.format("File uploaded. This transaction: $%.6f. This session: $%.6f", cost, _G.auctor_session_total_cost)
+
+    -- Stop spinner/notify
+    stop_spinner_or_notify("Auctor", result_message)
   end)
 end
+
+--------------------------------------------------------------------------------
+-- Auctor Insert
+-- 1. Creates a new line with the instruction marker (or a default) as comment
+-- 2. Moves cursor to that line, puts user into insert mode after the marker
+--------------------------------------------------------------------------------
+function M.auctor_insert()
+  -- Use a global marker if defined, else a default string:
+  local marker = vim.g.auctor_instruction_marker or "Auctor Instruction"
+
+  -- If commentstring is nil or empty, default to "// %s"
+  local cstring = vim.bo.commentstring
+  if not cstring or cstring == "" then
+    cstring = "// %s"
+  end
+
+  -- If the commentstring contains '%s', substitute our marker there
+  if cstring:find("%%s") then
+    -- Add a trailing space so user can start typing right away
+    cstring = cstring:gsub("%%s", marker .. " ")
+  else
+    -- Otherwise, just append our marker text to the end
+    cstring = cstring .. " " .. marker .. " "
+  end
+
+  -- Get current cursor location (1-based row, 0-based col)
+  local row, _ = unpack(vim.api.nvim_win_get_cursor(0))
+  -- Insert a line at the current row. (Because of how set_lines works,
+  -- inserting at `row, row` means we place a new line *below* the current one.)
+  vim.api.nvim_buf_set_lines(0, row, row, false, { cstring })
+
+  -- Move the cursor to the newly inserted line. Remember that nvim_win_set_cursor
+  -- uses 1-based line indexing, so the new line is at row+1.
+  -- The column is #cstring, so the user ends up right after the inserted text.
+  vim.api.nvim_win_set_cursor(0, { row + 1, #cstring })
+
+  -- Finally, switch to insert mode
+  vim.cmd("startinsert")
+end
+
 
 --------------------------------------------------------------------------------
 -- Auctor Select

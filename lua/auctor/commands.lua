@@ -18,6 +18,9 @@ function M.setup_commands()
     api.auctor_select()
   end, {})
 
+  vim.api.nvim_create_user_command('AuctorInsert', function()
+    api.auctor_insert()
+  end, {})
 end
 
 function M.setup_autocmds()
