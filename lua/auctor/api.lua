@@ -77,7 +77,7 @@ local function start_notify_spinner(title_msg)
       end
 
       local new_notif = notify(
-        frame .. " Auctor",
+        frame .. " Auctor",  -- message
         "info",
         opts
       )
@@ -86,7 +86,8 @@ local function start_notify_spinner(title_msg)
   end)
 end
 
-local function stop_notify_spinner(final_title, final_msg)
+-- Note the corrected order: notify(message, level, { title = ... })
+local function stop_notify_spinner(final_title, final_message)
   if notify_timer then
     notify_timer:stop()
     notify_timer:close()
@@ -96,10 +97,10 @@ local function stop_notify_spinner(final_title, final_msg)
   if notify_spinner_notif_id then
     vim.schedule(function()
       notify(
-        final_title,
+        final_message,   -- the *message* we want to show
         "info",
         {
-          title = final_msg,
+          title = final_title,  -- shown as the "header"
           replace = notify_spinner_notif_id,
           timeout = 3000
         }
@@ -122,17 +123,19 @@ local function start_spinner_or_notify(title_msg, fallback_msg)
   end
 end
 
--- Use vim.schedule for the final print so it doesn't get overwritten.
-local function stop_spinner_or_notify(success_title, success_msg)
+-- Here we rename the parameters for clarity:
+-- 'title' = nvim-notify "title" 
+-- 'message' = text displayed in nvim-notify's main field or fallback print
+local function stop_spinner_or_notify(title, message)
   if has_notify then
-    stop_notify_spinner(success_title, success_msg)
+    stop_notify_spinner(title, message)
   else
     -- Stop the spinner first
     stop_cmdline_spinner()
 
     -- Schedule the final print so it appears after the spinner is cleared
     vim.schedule(function()
-      print(success_msg)
+      print(message)
     end)
   end
 end
@@ -144,9 +147,6 @@ local M = {}
 
 --------------------------------------------------------------------------------
 -- Auctor Update
--- Prepend if available: vim.g.auctor_update_prompt
--- Then: FILEPATH: ...
--- Then wrap selected text in a code block
 --------------------------------------------------------------------------------
 function M.auctor_update()
   local api_key = util.get_api_key()
@@ -196,9 +196,8 @@ function M.auctor_update()
 
     local content = resp.choices[1].message.content or ""
 
-
     ---------------------------------------------------------------------------
-    -- Remove lines containing triple backticks, rather than partial substring
+    -- Remove lines containing triple backticks
     ---------------------------------------------------------------------------
     do
       local lines = {}
@@ -208,7 +207,6 @@ function M.auctor_update()
 
       local new_lines = {}
       for _, line in ipairs(lines) do
-        -- Only keep lines that do NOT contain ```
         if not line:find("```", 1, true) then
           table.insert(new_lines, line)
         end
@@ -221,7 +219,11 @@ function M.auctor_update()
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-    result_message = string.format("Selection updated. This transaction: $%.6f. This session: $%.6f", cost, _G.auctor_session_total_cost)
+    local result_message = string.format(
+      "Selection updated. This transaction: $%.6f. This session: $%.6f",
+      cost,
+      _G.auctor_session_total_cost
+    )
 
     -- Stop spinner/notify
     stop_spinner_or_notify("Auctor", result_message)
@@ -230,9 +232,6 @@ end
 
 --------------------------------------------------------------------------------
 -- Auctor Add
--- Prepend vim.g.auctor_update_prompt (if available)
--- Then: FILEPATH: ...
--- Wrap file content in a code block
 --------------------------------------------------------------------------------
 function M.auctor_add()
   local api_key = util.get_api_key()
@@ -275,7 +274,11 @@ function M.auctor_add()
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-    result_message = string.format("File uploaded. This transaction: $%.6f. This session: $%.6f", cost, _G.auctor_session_total_cost)
+    local result_message = string.format(
+      "File uploaded. This transaction: $%.6f. This session: $%.6f",
+      cost,
+      _G.auctor_session_total_cost
+    )
 
     -- Stop spinner/notify
     stop_spinner_or_notify("Auctor", result_message)
@@ -284,56 +287,46 @@ end
 
 --------------------------------------------------------------------------------
 -- Auctor Insert
--- 1. Creates a new line with the instruction marker (or a default) as comment
--- 2. Moves cursor to that line, puts user into insert mode after the marker
 --------------------------------------------------------------------------------
 function M.auctor_insert()
   -- We'll try to load nvim-comment
   local has_nvim_comment, nvim_comment = pcall(require, 'nvim_comment')
 
-  -- We'll use this marker text if we're falling back or want something appended
-  local marker_text = vim.g.auctor_instruction_marker
+  -- We'll use this marker text if user sets it
+  local marker_text = vim.g.auctor_instruction_marker or "Auctor Instruction"
 
   -- Get the current buffer and cursor position
   local buf = vim.api.nvim_get_current_buf()
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 
   if has_nvim_comment then
-    ----------------------------------------------------------------------------
+    ---------------------------------------------------------------------------
     -- If nvim-comment is installed, we:
     --   1. Insert a new, blank line below the current line
     --   2. Move the cursor to that line
     --   3. Toggle a line comment there
     --   4. Append our marker text
     --   5. Place the cursor in insert mode
-    ----------------------------------------------------------------------------
-
-    -- Insert a blank line at the current row (so it appears *below* the cursor)
+    ---------------------------------------------------------------------------
     vim.api.nvim_buf_set_lines(buf, row, row, false, { "" })
-    -- Move cursor to that newly inserted line
     vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
 
-    -- Toggle linewise comment on it (so it’s now a comment line)
     nvim_comment.comment_toggle_linewise_op()
 
-    -- Now, put our marker text at the end
     local commented_line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
     commented_line = commented_line .. " " .. marker_text .. " "
     vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { commented_line })
 
-    -- Move the cursor after our inserted text
     vim.api.nvim_win_set_cursor(0, { row + 1, #commented_line })
-    -- Enter insert mode
     vim.cmd("startinsert")
 
   else
-    ----------------------------------------------------------------------------
+    ---------------------------------------------------------------------------
     -- Fallback if nvim-comment is NOT installed
     --   1. Build the comment from vim.bo.commentstring if available, else "// %s"
     --   2. Insert a new line below the current line
     --   3. Place the cursor in insert mode after the marker
-    ----------------------------------------------------------------------------
-
+    ---------------------------------------------------------------------------
     local cstring = vim.bo.commentstring
     if not cstring or cstring == "" then
       cstring = "// %s"
@@ -345,11 +338,8 @@ function M.auctor_insert()
       cstring = cstring .. " " .. marker_text .. " "
     end
 
-    -- Insert a line below the cursor
     vim.api.nvim_buf_set_lines(buf, row, row, false, { cstring })
-    -- Move cursor to newly inserted line
     vim.api.nvim_win_set_cursor(0, { row + 1, #cstring })
-    -- Enter insert mode
     vim.cmd("startinsert")
   end
 end
