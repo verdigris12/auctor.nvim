@@ -1,9 +1,52 @@
+
 local util = require('auctor.util')
 local config = require('auctor.config')
 
 local M = {}
 
+--------------------------------------------------------------------------------
+-- Braille spinner code
+--------------------------------------------------------------------------------
+local spinner_frames = {'⣷','⣯','⣟','⡿','⢿','⣻','⣽','⣾'}
+local spinner_index = 1
+local spinner_timer = nil
 
+local function spinner()
+  -- Update the status line (or command line) with the spinner.
+  vim.schedule(function()
+    vim.api.nvim_echo({{spinner_frames[spinner_index], 'Normal'}}, false, {})
+    spinner_index = (spinner_index % #spinner_frames) + 1
+  end)
+end
+
+local function start_spinner()
+  -- Reset spinner if it's already running
+  if spinner_timer then
+    spinner_timer:stop()
+    spinner_timer:close()
+    spinner_timer = nil
+  end
+  spinner_index = 1
+  spinner_timer = vim.loop.new_timer()
+  -- Update spinner every 100ms
+  spinner_timer:start(0, 100, vim.schedule_wrap(spinner))
+end
+
+local function stop_spinner()
+  if spinner_timer then
+    spinner_timer:stop()
+    spinner_timer:close()
+    spinner_timer = nil
+  end
+  vim.schedule(function()
+    -- Clear spinner from the cmdline by printing an empty message
+    vim.api.nvim_echo({{'', 'Normal'}}, false, {})
+  end)
+end
+
+--------------------------------------------------------------------------------
+-- Auctor Update
+--------------------------------------------------------------------------------
 function M.auctor_update()
   local api_key = util.get_api_key()
   if not api_key then
@@ -17,6 +60,11 @@ function M.auctor_update()
     return
   end
 
+  -- Prepend custom prompt if available
+  if vim.g.auctor_update_prompt and vim.g.auctor_update_prompt ~= "" then
+    selection = vim.g.auctor_update_prompt .. "\n" .. selection
+  end
+
   local messages = {}
   if not _G.auctor_session_first_update_called then
     table.insert(messages, {role="system", content=vim.g.auctor_prompt_func()})
@@ -25,45 +73,54 @@ function M.auctor_update()
 
   table.insert(messages, {role="user", content=selection})
 
-  local resp, err = util.call_openai(messages, vim.g.auctor_model, vim.g.auctor_temperature)
-  if err then
-    vim.api.nvim_err_writeln("AuctorUpdate error: " .. err)
-    return
-  end
+  -- Start spinner
+  start_spinner()
 
-  local content = resp.choices[1].message.content or ""
+  -- Asynchronous request
+  util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
+    -- Stop spinner on completion
+    stop_spinner()
 
-  -- Remove only the first and last occurrences of ```
-  local first = content:find("```", 1, true)
-  if first then
-    -- Find the last occurrence of ``` by searching from the end
-    local lastPos = nil
-    local startPos = 1
-    while true do
-      local found = content:find("```", startPos, true)
-      if not found then break end
-      lastPos = found
-      startPos = found + 3
+    if err then
+      vim.api.nvim_err_writeln("AuctorUpdate error: " .. err)
+      return
     end
 
-    -- If we have both a first and a last occurrence (and they differ)
-    if lastPos and lastPos ~= first then
-      -- Remove the last occurrence
-      content = content:sub(1, lastPos - 1) .. content:sub(lastPos + 3)
+    local content = resp.choices[1].message.content or ""
+
+    -- Remove only the first and last occurrences of ```
+    local first = content:find("```", 1, true)
+    if first then
+      -- Find the last occurrence of ``` by searching from the end
+      local lastPos = nil
+      local startPos = 1
+      while true do
+        local found = content:find("```", startPos, true)
+        if not found then break end
+        lastPos = found
+        startPos = found + 3
+      end
+
+      -- If we have both a first and a last occurrence (and they differ)
+      if lastPos and lastPos ~= first then
+        -- Remove the last occurrence
+        content = content:sub(1, lastPos - 1) .. content:sub(lastPos + 3)
+      end
+      -- Remove the first occurrence
+      content = content:sub(1, first - 1) .. content:sub(first + 3)
     end
 
-    -- Remove the first occurrence
-    content = content:sub(1, first - 1) .. content:sub(first + 3)
-  end
+    util.replace_visual_selection(content)
 
-  util.replace_visual_selection(content)
-
-  local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
-  _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-  print(string.format("Auctor: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
+    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
+    print(string.format("Auctor: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+  end)
 end
 
--- AuctorAdd:
+--------------------------------------------------------------------------------
+-- Auctor Add
+--------------------------------------------------------------------------------
 -- 1. Uploads the current buffer with a prefix prompt
 -- 2. Does not return the resulting prompt
 -- 3. Prints cost and accumulate total
@@ -82,29 +139,40 @@ function M.auctor_add()
   local filetype = vim.bo.filetype
   local relpath = (filepath == "") and "NEW_FILE" or vim.fn.fnamemodify(filepath, ":.")
 
-  -- Construct the prompt as per the requested structure
-  -- 1. Relative file path (or NEW_FILE)
-  -- 2. Buffer filetype
-  -- 3. Buffer contents
-  local prompt = relpath .. "\n" .. filetype .. "\n" .. file_content
+  -- Construct the prompt
+  -- If vim.g.auctor_add_prompt is defined, prepend it
+  local prompt = ""
+  if vim.g.auctor_add_prompt and vim.g.auctor_add_prompt ~= "" then
+    prompt = vim.g.auctor_add_prompt .. "\n"
+  end
+  prompt = prompt .. relpath .. "\n" .. filetype .. "\n" .. file_content
 
   local messages = {
     {role="user", content=prompt}
   }
 
-  local resp, err = util.call_openai(messages, vim.g.auctor_model, vim.g.auctor_temperature)
-  if err then
-    vim.api.nvim_err_writeln("AuctorAdd error: " .. err)
-    return
-  end
+  -- Start spinner
+  start_spinner()
 
-  local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
-  _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-  print(string.format("AuctorAdd: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+  -- Asynchronous request
+  util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
+    -- Stop spinner
+    stop_spinner()
+
+    if err then
+      vim.api.nvim_err_writeln("AuctorAdd error: " .. err)
+      return
+    end
+
+    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
+    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
+    print(string.format("AuctorAdd: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
+  end)
 end
 
-
--- AuctorSelect:
+--------------------------------------------------------------------------------
+-- Auctor Select
+--------------------------------------------------------------------------------
 -- Prompts the user to choose a model and updates vim.g.auctor_model.
 function M.auctor_select()
   local model = vim.fn.input("Enter model name (e.g. gpt-4, gpt-3.5-turbo, etc.): ")
@@ -116,7 +184,9 @@ function M.auctor_select()
   end
 end
 
+--------------------------------------------------------------------------------
 -- Toggle autorun of AuctorAdd for each new buffer opened
+--------------------------------------------------------------------------------
 function M.auctor_auto_add_toggle()
   vim.g.auctor_auto_add = not vim.g.auctor_auto_add
   print("Auctor auto add is now " .. (vim.g.auctor_auto_add and "enabled" or "disabled"))

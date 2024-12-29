@@ -24,7 +24,6 @@ function M.get_visual_selection()
   return table.concat(lines, "\n")
 end
 
-
 function M.replace_visual_selection(new_text)
   local buf = vim.api.nvim_get_current_buf()
 
@@ -67,11 +66,13 @@ function M.replace_visual_selection(new_text)
   vim.api.nvim_buf_set_text(buf, start_line, start_col, end_line, end_col, new_lines)
 end
 
--- Function to call OpenAI API. Returns the response table or nil, err
-function M.call_openai(messages, model, temperature)
+-- New: Asynchronous call to OpenAI
+-- callback(resp, err) where resp is the decoded JSON or nil
+function M.call_openai_async(messages, model, temperature, callback)
   local api_key = M.get_api_key()
   if not api_key then
-    return nil, "No API key set. Please set vim.g.auctor_api_key or OPENAI_API_KEY."
+    callback(nil, "No API key set. Please set vim.g.auctor_api_key or OPENAI_API_KEY.")
+    return
   end
 
   local request_body = {
@@ -79,7 +80,6 @@ function M.call_openai(messages, model, temperature)
     messages = messages,
     temperature = temperature,
   }
-
   local json_str = vim.fn.json_encode(request_body)
 
   local cmd = {
@@ -92,17 +92,43 @@ function M.call_openai(messages, model, temperature)
     "-d", json_str
   }
 
-  local result = vim.fn.system(cmd)
-  if vim.v.shell_error ~= 0 then
-    return nil, "Curl error: " .. result
-  end
+  local stdout_data = {}
+  local stderr_data = {}
 
-  local resp = vim.fn.json_decode(result)
-  if resp.error then
-    return nil, "OpenAI API error: " .. resp.error.message
-  end
+  local job_id = vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data, _)
+      if data and #data > 0 then
+        table.insert(stdout_data, table.concat(data, "\n"))
+      end
+    end,
+    on_stderr = function(_, data, _)
+      if data and #data > 0 then
+        table.insert(stderr_data, table.concat(data, "\n"))
+      end
+    end,
+    on_exit = function(_, exit_code, _)
+      if exit_code ~= 0 then
+        callback(nil, "Curl error: " .. table.concat(stderr_data, "\n"))
+      else
+        local raw_output = table.concat(stdout_data, "\n")
+        local ok, resp = pcall(vim.fn.json_decode, raw_output)
+        if not ok then
+          callback(nil, "JSON decode error: " .. resp)
+          return
+        end
+        if resp.error then
+          callback(nil, "OpenAI API error: " .. resp.error.message)
+          return
+        end
+        callback(resp, nil)
+      end
+    end,
+  })
 
-  return resp, nil
+  if job_id <= 0 then
+    callback(nil, "Failed to start job. cmd: " .. table.concat(cmd, " "))
+  end
 end
 
 -- Calculate cost based on usage. Using GPT-4o:
@@ -133,3 +159,4 @@ function M.get_file_info()
 end
 
 return M
+
