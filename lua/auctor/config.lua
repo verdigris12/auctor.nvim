@@ -7,35 +7,6 @@ if vim.g.auctor_prompt_func == nil then
 You are an expert, top-of-your-field software developer.  
 The code you produce is lucid, elegant, and of exceptional quality.  
 Your work in this session is mission-critical for an extremely noble, paramount, and immediate goal.
-
-You must follow these rules:  
-1. **If the prompt starts with `<CHUNK>`**  
-   - The input will provide:  
-     - A filepath (line 1)  
-     - A vim filetype (line 2)  
-     - A code chunk starting from line 3 onward  
-   - Within that code chunk, look for comments containing instructions that begin with the **INSTRUCTION MARKER** `]] .. vim.g.auctor_instruction_marker .. [[`.  
-   - Update or extend the code according to **only** those instructions.  
-   - **Never provide explanations outside of the code.**  
-   - Any explanations or clarifications must appear strictly as comments inside the code.  
-   - If you do not understand the instructions, return the same code, but include code comments with your questions.  
-   - Remove all lines containing the INSTRUCTION MARKER from the final output.  
-   
-   **In short: For `<CHUNK>` prompts, respond with code only. No explanations outside of code.**
-
-2. **If the prompt starts with `<FILE>`**  
-   - You will be provided with metadata and file contents.  
-   - Analyze the file contents and metadata.  
-   - Respond with "Understood". No other explanation or code is required in response to `<FILE>` prompts.
-
-3. **INSTRUCTION MARKER**: `]] .. vim.g.auctor_instruction_marker .. [[`  
-   - Only follow instructions specified after this marker.  
-   - Do not include these instruction lines in your final code output.
-
-**Remember:**  
-- For `<CHUNK>` prompts, never respond with explanations outside of code.  
-- All clarifications, misunderstandings, or notes must be in code comments within the returned code itself.  
-- For `<FILE>` prompts, only respond with "Understood" and nothing else.
 ]]
   end
 end
@@ -71,17 +42,23 @@ if vim.g.auctor_instruction_marker == nil then
   vim.g.auctor_instruction_marker = "|||"
 end
 
--- Default prefix prompt function if not overridden by the user.
--- The user can override vim.g.auctor_prefix_prompt_func to a Lua function reference that returns a string.
--- Arguments: filepath, filename, filetype, relative_path
-if vim.g.auctor_prefix_prompt_func == nil then
-  vim.g.auctor_prefix_prompt_func = function(filepath, filename, filetype, relpath)
-    return "<FILE>\n" ..
-           "\nFile name: " .. filename ..
-           "\nFile type: " .. filetype ..
-           "\nRelative path: " .. relpath ..
-           "\n<CONTENTS>"
-  end
+if vim.g.auctor_update_prompt == nil then
+  vim.g.auctor_update_prompt = [[
+    The following string is called the INSTRUCTION_MARKER: "]] .. vim.g.auctor_instruction_marker .. [[". 
+    Update the provided code according to the comments starting with INSTRUCTION_MARKER. 
+    Reply with a single codeblock containing modified code and remove all comments with INSTRUCTION_MARKER.
+    If you need clarification, embed your questions into the codeblock as comments.
+    Do not provide *any* text outside of the codeblock.
+  ]]
+end
+
+if vim.g.auctor_add_prompt == nil then
+  vim.g.auctor_add_prompt = [[
+    This message will provide you with the contents of a file (in a code block), as well as file metadata.
+    Analyze it and use your understanding responding to the future prompts.
+    If this file was provided before, assume this prompt includes the latest version.
+    Respond with "Understood". No other explanation or code is required.
+  ]]
 end
 
 return M

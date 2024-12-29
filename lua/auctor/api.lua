@@ -47,18 +47,13 @@ local function stop_cmdline_spinner()
 end
 
 --------------------------------------------------------------------------------
--- nvim-notify-based spinner
---------------------------------------------------------------------------------
--- We repeatedly call notify(..., { replace = ... }) to update the same notification.
+-- nvim-notify-based spinner (if available)
 --------------------------------------------------------------------------------
 local notify_timer = nil
 local notify_spinner_index = 1
 local notify_spinner_notif_id = nil
 
---- Start a spinner notification that updates every 100ms.
---- @param title_msg string  The text shown in the "title" field of the notification
 local function start_notify_spinner(title_msg)
-  -- If there's already a timer, close it first
   if notify_timer then
     notify_timer:stop()
     notify_timer:close()
@@ -75,18 +70,14 @@ local function start_notify_spinner(title_msg)
     vim.schedule(function()
       local opts = {}
       if notify_spinner_notif_id then
-        -- Update the existing notification
         opts.replace = notify_spinner_notif_id
       else
-        -- First time creating the notification
         opts.title = title_msg
         opts.timeout = false
       end
 
       local new_notif = notify(
-        -- Notification message: we embed the spinner in the "main text"
         frame .. " Auctor",
-        -- Notification level
         "info",
         opts
       )
@@ -95,9 +86,6 @@ local function start_notify_spinner(title_msg)
   end)
 end
 
---- Stop the spinner and replace it with a final message
---- @param final_title string  Notification text
---- @param final_msg string    Notification title (the "header")
 local function stop_notify_spinner(final_title, final_msg)
   if notify_timer then
     notify_timer:stop()
@@ -113,7 +101,7 @@ local function stop_notify_spinner(final_title, final_msg)
         {
           title = final_msg,
           replace = notify_spinner_notif_id,
-          timeout = 3000 -- show final message for 3s
+          timeout = 3000
         }
       )
       notify_spinner_notif_id = nil
@@ -122,13 +110,13 @@ local function stop_notify_spinner(final_title, final_msg)
 end
 
 --------------------------------------------------------------------------------
--- Helper: start spinner or notify
+-- Spinner or notify helper
 --------------------------------------------------------------------------------
 local function start_spinner_or_notify(title_msg, fallback_msg)
   if has_notify then
     start_notify_spinner(title_msg)
   else
-    print(fallback_msg) -- immediate fallback print
+    print(fallback_msg)
     start_cmdline_spinner()
   end
 end
@@ -143,14 +131,17 @@ local function stop_spinner_or_notify(success_title, success_msg)
 end
 
 --------------------------------------------------------------------------------
--- Main Module
+-- Main module
 --------------------------------------------------------------------------------
 local M = {}
 
+--------------------------------------------------------------------------------
 -- Auctor Update
--- 1. Asynchronously call the API
--- 2. If nvim-notify is available, use notification spinner; otherwise fallback
--- 3. Prepend vim.g.auctor_update_prompt if set
+-- Prepend if available: vim.g.auctor_update_prompt
+-- Then: FILETYPE: ...
+--       FILENAME: ...
+-- Then wrap selected text in a code block
+--------------------------------------------------------------------------------
 function M.auctor_update()
   local api_key = util.get_api_key()
   if not api_key then
@@ -164,10 +155,20 @@ function M.auctor_update()
     return
   end
 
-  -- Prepend custom prompt if available
+  local filetype = vim.bo.filetype
+  local filename = vim.fn.expand("%:t")
+  local filepath = vim.fn.expand("%:p")
+
+  -- Build the user-content prompt
+  local user_content = ""
   if vim.g.auctor_update_prompt and vim.g.auctor_update_prompt ~= "" then
-    selection = vim.g.auctor_update_prompt .. "\n" .. selection
+    user_content = user_content .. vim.g.auctor_update_prompt .. "\n"
   end
+  user_content = user_content
+      .. "FILEPATH: " .. filepath .. "\n\n"
+      .. "```" .. filetype .. "\n"
+      .. selection
+      .. "\n```\n"
 
   local messages = {}
   if not _G.auctor_session_first_update_called then
@@ -175,13 +176,12 @@ function M.auctor_update()
     _G.auctor_session_first_update_called = true
   end
 
-  table.insert(messages, {role="user", content=selection})
+  table.insert(messages, {role="user", content=user_content})
 
-  -- Start spinner (or notify)
+  -- Start spinner/notify
   start_spinner_or_notify("Updating selection...", "Auctor: Updating selection...")
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
-    -- Stop spinner/notify
     if err then
       stop_spinner_or_notify("Auctor Error", "Update failed")
       vim.api.nvim_err_writeln("AuctorUpdate error: " .. err)
@@ -190,10 +190,12 @@ function M.auctor_update()
 
     local content = resp.choices[1].message.content or ""
 
-    -- Remove only the first and last occurrences of ```
+    -- Stop spinner/notify
+    stop_spinner_or_notify("Auctor", "Selection updated")
+
+    -- Remove the first and last occurrences of ``` if present
     local first = content:find("```", 1, true)
     if first then
-      -- Find the last occurrence of ``` by searching from the end
       local lastPos = nil
       local startPos = 1
       while true do
@@ -202,14 +204,9 @@ function M.auctor_update()
         lastPos = found
         startPos = found + 3
       end
-
-      -- If we have both a first and a last occurrence (and they differ)
       if lastPos and lastPos ~= first then
-        -- Remove the last occurrence
         content = content:sub(1, lastPos - 1) .. content:sub(lastPos + 3)
       end
-
-      -- Remove the first occurrence
       content = content:sub(1, first - 1) .. content:sub(first + 3)
     end
 
@@ -217,19 +214,17 @@ function M.auctor_update()
 
     local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-
-    -- Show final success
-    stop_spinner_or_notify("Auctor", "Selection updated")
-
-    print(string.format("Auctor: Spent $%.6f this transaction. Total: $%.6f this session.",
-      cost, _G.auctor_session_total_cost))
+    print(string.format("Auctor: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
   end)
 end
 
--- AuctorAdd:
--- 1. Uploads the current buffer with a prefix prompt
--- 2. Prints cost and accumulates total
--- 3. Prepend vim.g.auctor_add_prompt if set
+--------------------------------------------------------------------------------
+-- Auctor Add
+-- Prepend vim.g.auctor_update_prompt (if available)
+-- Then: FILETYPE: ...
+--       FILENAME: ...
+-- Then wrap file content in a code block
+--------------------------------------------------------------------------------
 function M.auctor_add()
   local api_key = util.get_api_key()
   if not api_key then
@@ -244,43 +239,43 @@ function M.auctor_add()
   local filepath = vim.fn.expand("%:p")
   local filetype = vim.bo.filetype
   local filename = vim.fn.expand("%:t")
-  local relpath = (filepath == "") and "NEW_FILE" or vim.fn.fnamemodify(filepath, ":.")
 
-  -- Construct the prompt
-  local prompt = ""
-  if vim.g.auctor_add_prompt and vim.g.auctor_add_prompt ~= "" then
-    prompt = vim.g.auctor_add_prompt .. "\n"
+  local user_content = ""
+  if vim.g.auctor_update_prompt and vim.g.auctor_update_prompt ~= "" then
+    user_content = user_content .. vim.g.auctor_update_prompt .. "\n"
   end
-  prompt = prompt .. relpath .. "\n" .. filetype .. "\n" .. file_content
+  user_content = user_content
+      .. "FILEPATH: " .. filepath .. "\n\n"
+      .. "```" .. filetype .. "\n"
+      .. file_content
+      .. "\n```\n"
 
   local messages = {
-    {role="user", content=prompt}
+    {role="user", content=user_content}
   }
 
   -- Start spinner/notify
   start_spinner_or_notify("Uploading " .. filename .. "...", "Auctor: Uploading " .. filename .. "...")
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
-    -- Stop spinner/notify
     if err then
       stop_spinner_or_notify("Auctor Error", "Upload failed")
       vim.api.nvim_err_writeln("AuctorAdd error: " .. err)
       return
     end
 
-    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
-    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-
-    -- Show final success
+    -- Stop spinner/notify
     stop_spinner_or_notify("Auctor", "File uploaded")
 
-    print(string.format("AuctorAdd: Spent $%.6f this transaction. Total: $%.6f this session.",
-      cost, _G.auctor_session_total_cost))
+    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
+    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
+    print(string.format("AuctorAdd: Spent $%.6f this transaction. Total: $%.6f this session.", cost, _G.auctor_session_total_cost))
   end)
 end
 
--- AuctorSelect:
--- Prompts the user to choose a model and updates vim.g.auctor_model.
+--------------------------------------------------------------------------------
+-- Auctor Select
+--------------------------------------------------------------------------------
 function M.auctor_select()
   local model = vim.fn.input("Enter model name (e.g. gpt-4, gpt-3.5-turbo, etc.): ")
   if model and model ~= "" then
@@ -291,13 +286,15 @@ function M.auctor_select()
   end
 end
 
--- Toggle autorun of AuctorAdd for each new buffer opened
+--------------------------------------------------------------------------------
+-- Auctor AutoAdd Toggle
+--------------------------------------------------------------------------------
 function M.auctor_auto_add_toggle()
   vim.g.auctor_auto_add = not vim.g.auctor_auto_add
   print("Auctor auto add is now " .. (vim.g.auctor_auto_add and "enabled" or "disabled"))
 end
 
--- Function to be called by autocmd on BufReadPost or BufNewFile to auto run AuctorAdd if enabled
+-- Auto-add on BufReadPost or BufNewFile, if enabled
 function M.auto_add_if_enabled()
   if vim.g.auctor_auto_add then
     M.auctor_add()
