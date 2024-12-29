@@ -75,7 +75,7 @@ This will start a new line with an instruction comment and will drop you into th
 use("verdigris12/auctor.nvim")
 ```
 
-### lazy.nvim:
+### lazy.nvim
 
 ```lua
 {
@@ -85,6 +85,25 @@ use("verdigris12/auctor.nvim")
   end
 }
 ```
+
+ ### Nixvim
+
+ (pick a revision for your liking)
+
+ ```nix
+  programs.nixvim.extraPlugins = [
+    (pkgs.vimUtils.buildVimPlugin {
+       name = "auctor";
+       src = pkgs.fetchFromGitHub {
+         owner = "verdigris12";
+         repo = "auctor.nvim";
+         rev = "7ccadc1fddfb7e3784e61a3e5e5853e6c1c1d7b3";
+         sha256 = "oJ2NnpFkOKFI3f+kpSS0n61f8NLqi8VlK81BwJrzjCU=";
+     };
+    })
+  ];
+ ```
+
 
 ## Configuration
 
