@@ -64,7 +64,6 @@ local function start_notify_spinner(body_msg)
   notify_spinner_index = 1
   notify_spinner_notif_id = nil
 
-  -- Repeatedly update the title with the next spinner frame
   notify_timer = vim.loop.new_timer()
   notify_timer:start(0, 100, function()
     local frame = spinner_frames[notify_spinner_index]
@@ -122,13 +121,16 @@ end
 --------------------------------------------------------------------------------
 
 --- Begin spinner or fallback in cmdline.
---- @param msg string The body message for the notification or fallback print
+--- @param msg string The body message for the notification or fallback
 --- @param fallback_msg string The message to print if notify isn't available
 local function start_spinner_or_notify(msg, fallback_msg)
   if has_notify then
+    -- Keep newlines if notify is available
     start_notify_spinner(msg)
   else
-    print(fallback_msg)
+    -- Strip newlines if notify is NOT available
+    local single_line_msg = fallback_msg:gsub("[\r\n]+", " ")
+    print(single_line_msg)
     start_cmdline_spinner()
   end
 end
@@ -142,7 +144,9 @@ local function stop_spinner_or_notify(final_title, final_message)
   else
     stop_cmdline_spinner()
     vim.schedule(function()
-      print(final_message)
+      -- Strip newlines from the final_message so it doesn't break lines in the cmdline
+      local single_line_msg = final_message:gsub("[\r\n]+", " ")
+      print(single_line_msg)
     end)
   end
 end
@@ -191,7 +195,6 @@ function M.auctor_update()
 
   table.insert(messages, {role="user", content=user_content})
 
-  -- Start spinner or fallback (the "body" of the notification, if available)
   start_spinner_or_notify("Updating selection...", "Auctor: Updating selection...")
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
@@ -228,7 +231,7 @@ function M.auctor_update()
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
 
     local result_message = string.format(
-      "Selection updated. This transaction: $%.6f. This session: $%.6f",
+      " Selection updated.\n This transaction: $%.6f. \nThis session: $%.6f",
       cost,
       _G.auctor_session_total_cost
     )
@@ -269,10 +272,7 @@ function M.auctor_add()
     {role="user", content=user_content}
   }
 
-  start_spinner_or_notify(
-    "Uploading " .. filename .. "...",
-    "Auctor: Uploading " .. filename .. "..."
-  )
+  start_spinner_or_notify("Uploading " .. filename .. "...", "Auctor: Uploading " .. filename .. "...")
 
   util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
     if err then
@@ -285,7 +285,7 @@ function M.auctor_add()
     _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
 
     local result_message = string.format(
-      "File uploaded. This transaction: $%.6f. This session: $%.6f",
+      " File uploaded. \nThis transaction: $%.6f. \nThis session: $%.6f",
       cost,
       _G.auctor_session_total_cost
     )
@@ -382,3 +382,4 @@ function M.auto_add_if_enabled()
 end
 
 return M
+
