@@ -1,385 +1,367 @@
+-- High-level commands implementing the Auctor user interface. These
+-- functions coordinate selection handling, prompt construction,
+-- asynchronous API calls, diff preview and result application.
+
+local state = require('auctor.state')
+local providers = require('auctor.providers')
 local util = require('auctor.util')
 local config = require('auctor.config')
 
 --------------------------------------------------------------------------------
--- Attempt to load nvim-notify
+-- Spinner helpers
 --------------------------------------------------------------------------------
-local has_notify, notify = pcall(require, 'notify')
 
---------------------------------------------------------------------------------
--- Braille spinner frames
---------------------------------------------------------------------------------
+-- We reuse the braille spinner frames from the original implementation.
 local spinner_frames = {'⣷','⣯','⣟','⡿','⢿','⣻','⣽','⣾'}
+local has_notify, notify_lib = pcall(require, 'notify')
 
---------------------------------------------------------------------------------
--- Fallback: command-line spinner
---------------------------------------------------------------------------------
-local spinner_index = 1
-local spinner_timer = nil
+-- Internal spinner state
+local spinner = {
+  timer = nil,
+  frame = 1,
+  notif_id = nil,
+}
 
-local function fallback_cmdline_spinner()
-  vim.schedule(function()
-    vim.api.nvim_echo({{spinner_frames[spinner_index], 'Normal'}}, false, {})
-    spinner_index = (spinner_index % #spinner_frames) + 1
-  end)
-end
-
-local function start_cmdline_spinner()
-  if spinner_timer then
-    spinner_timer:stop()
-    spinner_timer:close()
-    spinner_timer = nil
+-- Start a spinner. When nvim-notify is available the spinner is shown
+-- in the title of a persistent notification. Otherwise the spinner is
+-- echoed on the command line. Returns immediately.
+local function start_spinner(title_msg, fallback_msg)
+  -- Cancel any existing spinner
+  if spinner.timer then
+    spinner.timer:stop()
+    spinner.timer:close()
+    spinner.timer = nil
   end
-  spinner_index = 1
-  spinner_timer = vim.loop.new_timer()
-  spinner_timer:start(0, 100, vim.schedule_wrap(fallback_cmdline_spinner))
-end
-
-local function stop_cmdline_spinner()
-  if spinner_timer then
-    spinner_timer:stop()
-    spinner_timer:close()
-    spinner_timer = nil
-  end
-  vim.schedule(function()
-    vim.api.nvim_echo({{'', 'Normal'}}, false, {})
-  end)
-end
-
---------------------------------------------------------------------------------
--- nvim-notify-based spinner (if available)
---------------------------------------------------------------------------------
-local notify_timer = nil
-local notify_spinner_index = 1
-local notify_spinner_notif_id = nil
-
---- Start spinner using nvim-notify. The "body_msg" is the main message,
---- while each frame of the spinner goes in the "title".
-local function start_notify_spinner(body_msg)
-  if notify_timer then
-    notify_timer:stop()
-    notify_timer:close()
-    notify_timer = nil
-  end
-  notify_spinner_index = 1
-  notify_spinner_notif_id = nil
-
-  notify_timer = vim.loop.new_timer()
-  notify_timer:start(0, 100, function()
-    local frame = spinner_frames[notify_spinner_index]
-    notify_spinner_index = (notify_spinner_index % #spinner_frames) + 1
-
-    vim.schedule(function()
+  spinner.frame = 1
+  spinner.notif_id = nil
+  if has_notify then
+    spinner.timer = vim.loop.new_timer()
+    spinner.timer:start(0, 100, vim.schedule_wrap(function()
+      local frame_char = spinner_frames[spinner.frame]
+      spinner.frame = (spinner.frame % #spinner_frames) + 1
       local opts = {}
-      if notify_spinner_notif_id then
-        opts.replace = notify_spinner_notif_id
+      if spinner.notif_id then
+        opts.replace = spinner.notif_id
       else
         opts.timeout = false
       end
-
-      -- The spinner is shown in the title
-      opts.title = frame .. " Auctor"
-
-      local new_notif = notify(
-        body_msg,   -- The body of the notification
-        "info",
-        opts
-      )
-      notify_spinner_notif_id = new_notif.id
-    end)
-  end)
-end
-
---- Stop spinner and replace it with a final title and body (message).
---- final_title -> goes in opts.title
---- final_message -> is the body
-local function stop_notify_spinner(final_title, final_message)
-  if notify_timer then
-    notify_timer:stop()
-    notify_timer:close()
-    notify_timer = nil
-  end
-
-  if notify_spinner_notif_id then
-    vim.schedule(function()
-      notify(
-        final_message,  -- body
-        "info",
-        {
-          title = final_title,
-          replace = notify_spinner_notif_id,
-          timeout = 3000
-        }
-      )
-      notify_spinner_notif_id = nil
-    end)
-  end
-end
-
---------------------------------------------------------------------------------
--- Spinner or notify helper
---------------------------------------------------------------------------------
-
---- Begin spinner or fallback in cmdline.
---- @param msg string The body message for the notification or fallback
---- @param fallback_msg string The message to print if notify isn't available
-local function start_spinner_or_notify(msg, fallback_msg)
-  if has_notify then
-    -- Keep newlines if notify is available
-    start_notify_spinner(msg)
+      opts.title = frame_char .. ' Auctor'
+      local n = notify_lib(title_msg, 'info', opts)
+      spinner.notif_id = n.id
+    end))
   else
-    -- Strip newlines if notify is NOT available
-    local single_line_msg = fallback_msg:gsub("[\r\n]+", " ")
-    print(single_line_msg)
-    start_cmdline_spinner()
+    -- Fallback: print message once and update spinner on status line
+    local msg = fallback_msg:gsub('[\r\n]+', ' ')
+    print(msg)
+    spinner.timer = vim.loop.new_timer()
+    spinner.timer:start(0, 100, vim.schedule_wrap(function()
+      local frame_char = spinner_frames[spinner.frame]
+      spinner.frame = (spinner.frame % #spinner_frames) + 1
+      vim.api.nvim_echo({{frame_char .. ' Auctor', 'Normal'}}, false, {})
+    end))
   end
 end
 
---- End spinner or fallback, showing a final title and body.
---- @param final_title string Title for the final notification
---- @param final_message string Body for the final notification (or print)
-local function stop_spinner_or_notify(final_title, final_message)
-  if has_notify then
-    stop_notify_spinner(final_title, final_message)
-  else
-    stop_cmdline_spinner()
+-- Stop the spinner. If using nvim-notify, replace the spinner with a
+-- final message. Otherwise clear the command line and print the message.
+local function stop_spinner(final_title, final_msg)
+  if spinner.timer then
+    spinner.timer:stop()
+    spinner.timer:close()
+    spinner.timer = nil
+  end
+  if has_notify and spinner.notif_id then
     vim.schedule(function()
-      -- Strip newlines from the final_message so it doesn't break lines in the cmdline
-      local single_line_msg = final_message:gsub("[\r\n]+", " ")
-      print(single_line_msg)
+      notify_lib(final_msg, 'info', { title = final_title, replace = spinner.notif_id, timeout = 3000 })
+      spinner.notif_id = nil
+    end)
+  else
+    vim.schedule(function()
+      -- Clear spinner echo
+      vim.api.nvim_echo({{'', 'Normal'}}, false, {})
+      local single = final_msg:gsub('[\r\n]+', ' ')
+      print(single)
     end)
   end
 end
 
 --------------------------------------------------------------------------------
--- Main module
+-- Diff preview helper
 --------------------------------------------------------------------------------
+
+--- Display a unified diff in a floating window and ask the user
+-- whether to apply it. The callback receives true to apply or false
+-- to discard. The diff string should include newlines.
+local function present_diff(diff_text, on_done)
+  -- If diff is nil or empty, skip preview and apply immediately
+  if not diff_text or diff_text == '' then
+    on_done(true)
+    return
+  end
+  -- Create a scratch buffer
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = 'nofile'
+  vim.bo[buf].bufhidden = 'wipe'
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = 'diff'
+  -- Split diff into lines and set them
+  local lines = {}
+  for s in diff_text:gmatch('[^\n]*\n?') do
+    if s:sub(-1) == '\n' then
+      table.insert(lines, s:sub(1, -2))
+    elseif s ~= '' then
+      table.insert(lines, s)
+    end
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  -- Calculate size; ensure at least 20x60 and at most 80% of screen
+  local ui = vim.api.nvim_list_uis()[1]
+  local total_cols = ui.width
+  local total_rows = ui.height
+  local width = math.min(math.max(total_cols - 10, 60), total_cols * 0.8)
+  local height = math.min(math.max(#lines + 4, 10), total_rows * 0.8)
+  local row = math.floor((total_rows - height) / 2 - 1)
+  local col = math.floor((total_cols - width) / 2)
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = 'editor',
+    style = 'minimal',
+    row = row,
+    col = col,
+    width = math.floor(width),
+    height = math.floor(height),
+    border = 'single',
+  })
+  -- Add instructions
+  vim.api.nvim_buf_set_option(buf, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(buf, 0, 0, false, {
+    'Diff Preview – press y/Enter to apply, n/q/Esc to cancel',
+    ''
+  })
+  vim.api.nvim_buf_set_option(buf, 'modifiable', false)
+  -- Define finish function
+  local function finish(apply)
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if on_done then on_done(apply) end
+  end
+  -- Keymaps
+  local opts = { nowait = true, noremap = true, silent = true, buffer = buf }
+  vim.keymap.set('n', 'q', function() finish(false) end, opts)
+  vim.keymap.set('n', 'n', function() finish(false) end, opts)
+  vim.keymap.set('n', '<Esc>', function() finish(false) end, opts)
+  vim.keymap.set('n', 'y', function() finish(true) end, opts)
+  vim.keymap.set('n', '<CR>', function() finish(true) end, opts)
+end
+
+--------------------------------------------------------------------------------
+-- Core API functions
+--------------------------------------------------------------------------------
+
 local M = {}
 
---------------------------------------------------------------------------------
--- Auctor Update
---------------------------------------------------------------------------------
+--- Update the selected region using the active provider. Shows a diff
+-- preview before applying the result. Accumulates cost in the session
+-- state and notifies the user of the cost.
 function M.auctor_update()
-  local api_key = util.get_api_key()
-  if not api_key then
-    vim.api.nvim_err_writeln("Auctor: No API key set. Please set vim.g.auctor_api_key or OPENAI_API_KEY.")
+  -- Retrieve selection
+  local text, start_pos, end_pos = util.get_visual_selection()
+  if text == '' then
+    util.notify('AuctorUpdate: No text selected.', 'error')
     return
   end
-
-  local selection = util.get_visual_selection()
-  if selection == "" then
-    vim.api.nvim_err_writeln("AuctorUpdate: No text selected.")
-    return
-  end
-
-  local filetype = vim.bo.filetype
-  local filename = vim.fn.expand("%:t")
-  local filepath = vim.fn.expand("%:p")
-
-  -- Build the user-content prompt
-  local user_content = ""
-  if vim.g.auctor_update_prompt and vim.g.auctor_update_prompt ~= "" then
-    user_content = user_content .. vim.g.auctor_update_prompt .. "\n"
-  end
-  user_content = user_content
-      .. "FILEPATH: " .. filepath .. "\n\n"
-      .. "```" .. filetype .. "\n"
-      .. selection
-      .. "\n```\n"
-
+  -- Build user content: include filepath and filetype for context
+  local filepath = vim.fn.expand('%:p')
+  local filetype = vim.bo.filetype or ''
+  local user_content = ''
+  local provider = providers.get_active()
+  -- Append provider-specific update prompt after the system prompt later
+  user_content = user_content .. 'FILEPATH: ' .. filepath .. '\n\n'
+  user_content = user_content .. '```' .. filetype .. '\n' .. text .. '\n```\n'
+  -- Build messages
   local messages = {}
-  if not _G.auctor_session_first_update_called then
-    table.insert(messages, {role="system", content=vim.g.auctor_prompt_func()})
-    _G.auctor_session_first_update_called = true
+  -- On first update send system prompt
+  if not state.session_first_update_called then
+    -- Determine instruction marker
+    local marker = state.opts.instruction_marker or config.default_instruction_marker
+    local system_prompt = state.opts.system_update_prompt or config.build_update_prompt(marker)
+    -- Append provider-specific update prompt
+    if provider.update_prompt and provider.update_prompt ~= '' then
+      system_prompt = system_prompt .. '\n' .. provider.update_prompt
+    end
+    table.insert(messages, { role = 'system', content = system_prompt })
+    state.session_first_update_called = true
   end
-
-  table.insert(messages, {role="user", content=user_content})
-
-  start_spinner_or_notify("Updating selection...", "Auctor: Updating selection...")
-
-  util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
+  table.insert(messages, { role = 'user', content = user_content })
+  -- Start spinner
+  start_spinner('Updating selection...', 'Auctor: Updating selection...')
+  -- Perform request
+  util.call_api_async(messages, function(resp, err)
+    stop_spinner('Auctor', err and 'Update failed' or 'Update completed')
     if err then
-      stop_spinner_or_notify("Auctor Error", "Update failed")
-      vim.api.nvim_err_writeln("AuctorUpdate error: " .. err)
+      util.notify('AuctorUpdate error: ' .. err, 'error')
       return
     end
-
-    local content = resp.choices[1].message.content or ""
-
-    ---------------------------------------------------------------------------
-    -- Remove lines containing triple backticks
-    ---------------------------------------------------------------------------
-    do
-      local lines = {}
-      for line in content:gmatch("([^\n]*)\n?") do
-        table.insert(lines, line)
-      end
-
-      local new_lines = {}
-      for _, line in ipairs(lines) do
-        if not line:find("```", 1, true) then
-          table.insert(new_lines, line)
-        end
-      end
-
-      content = table.concat(new_lines, "\n")
+    local choice = resp.choices and resp.choices[1]
+    if not choice or not choice.message then
+      util.notify('AuctorUpdate error: invalid response', 'error')
+      return
     end
-
-    util.replace_visual_selection(content)
-
-    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
-    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-
-    local result_message = string.format(
-      " Selection updated.\n This transaction: $%.6f. \nThis session: $%.6f",
-      cost,
-      _G.auctor_session_total_cost
-    )
-
-    stop_spinner_or_notify("Auctor", result_message)
+    local content = choice.message.content or ''
+    -- Unwrap a single fenced code block if present
+    local inner = content:match('^%s*```[%w_]*%s*[\r\n](.*)[\r\n]```%s*$')
+    if inner then
+      content = inner
+    end
+    -- Compute diff
+    local diff = util.diff_unified(text, content)
+    local usage = resp.usage or {}
+    local cost = util.calculate_cost(usage)
+    -- Present diff
+    present_diff(diff, function(apply)
+      if apply then
+        util.replace_visual_selection(start_pos, end_pos, content)
+        state.session_total_cost = state.session_total_cost + cost
+        util.notify(string.format('Selection updated.\nThis transaction: $%.6f\nThis session: $%.6f', cost, state.session_total_cost), 'info')
+      else
+        util.notify('Update canceled.', 'warn')
+      end
+    end)
   end)
 end
 
---------------------------------------------------------------------------------
--- Auctor Add
---------------------------------------------------------------------------------
+--- Upload the entire current buffer to the active provider. This
+-- function sends an "add" request (system prompt + provider add prompt)
+-- to prime the model with the file contents. No diff preview is used.
 function M.auctor_add()
-  local api_key = util.get_api_key()
-  if not api_key then
-    vim.api.nvim_err_writeln("Auctor: No API key set. Please set vim.g.auctor_api_key or OPENAI_API_KEY.")
-    return
-  end
-
   local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local file_content = table.concat(lines, "\n")
-
-  local filepath = vim.fn.expand("%:p")
-  local filetype = vim.bo.filetype
-  local filename = vim.fn.expand("%:t")
-
-  local user_content = ""
-  if vim.g.auctor_update_prompt and vim.g.auctor_update_prompt ~= "" then
-    user_content = user_content .. vim.g.auctor_update_prompt .. "\n"
+  local file_content = table.concat(lines, '\n')
+  local filepath = vim.fn.expand('%:p')
+  local filetype = vim.bo.filetype or ''
+  local provider = providers.get_active()
+  -- Build user message
+  local user_content = ''
+  user_content = user_content .. 'FILEPATH: ' .. filepath .. '\n\n'
+  user_content = user_content .. '```' .. filetype .. '\n' .. file_content .. '\n```\n'
+  -- Build messages
+  local messages = {}
+  -- Always send the system add prompt on add operations
+  local system_prompt = state.opts.system_add_prompt or config.default_system_add_prompt
+  if provider.add_prompt and provider.add_prompt ~= '' then
+    system_prompt = system_prompt .. '\n' .. provider.add_prompt
   end
-  user_content = user_content
-      .. "FILEPATH: " .. filepath .. "\n\n"
-      .. "```" .. filetype .. "\n"
-      .. file_content
-      .. "\n```\n"
-
-  local messages = {
-    {role="user", content=user_content}
-  }
-
-  start_spinner_or_notify("Uploading " .. filename .. "...", "Auctor: Uploading " .. filename .. "...")
-
-  util.call_openai_async(messages, vim.g.auctor_model, vim.g.auctor_temperature, function(resp, err)
+  table.insert(messages, { role = 'system', content = system_prompt })
+  table.insert(messages, { role = 'user', content = user_content })
+  -- Show spinner
+  local filename = vim.fn.expand('%:t')
+  start_spinner('Uploading ' .. filename .. '...', 'Auctor: Uploading ' .. filename .. '...')
+  util.call_api_async(messages, function(resp, err)
+    stop_spinner('Auctor', err and 'Upload failed' or 'Upload completed')
     if err then
-      stop_spinner_or_notify("Auctor Error", "Upload failed")
-      vim.api.nvim_err_writeln("AuctorAdd error: " .. err)
+      util.notify('AuctorAdd error: ' .. err, 'error')
       return
     end
-
-    local cost = util.calculate_cost(resp.usage, vim.g.auctor_model)
-    _G.auctor_session_total_cost = _G.auctor_session_total_cost + cost
-
-    local result_message = string.format(
-      " File uploaded. \nThis transaction: $%.6f. \nThis session: $%.6f",
-      cost,
-      _G.auctor_session_total_cost
-    )
-
-    stop_spinner_or_notify("Auctor", result_message)
+    local usage = resp.usage or {}
+    local cost = util.calculate_cost(usage)
+    state.session_total_cost = state.session_total_cost + cost
+    util.notify(string.format('File uploaded.\nThis transaction: $%.6f\nThis session: $%.6f', cost, state.session_total_cost), 'info')
   end)
 end
 
---------------------------------------------------------------------------------
--- Auctor Insert
---------------------------------------------------------------------------------
+--- Insert an instruction marker comment below the current line. If
+-- nvim-comment is installed it is used to respect comment formatting;
+-- otherwise vim.bo.commentstring is consulted. Places the cursor in
+-- insert mode ready to type the instruction.
 function M.auctor_insert()
-  -- We'll try to load nvim-comment
-  local has_nvim_comment, nvim_comment = pcall(require, 'nvim_comment')
-
-  -- We'll use this marker text if user sets it
-  local marker_text = vim.g.auctor_instruction_marker or "Auctor Instruction"
-
-  -- Get the current buffer and cursor position
+  local marker_text = state.opts.instruction_marker or config.default_instruction_marker or 'Auctor Instruction'
+  -- Attempt to load nvim-comment
+  local ok, nvim_comment = pcall(require, 'nvim_comment')
   local buf = vim.api.nvim_get_current_buf()
-  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-
-  if has_nvim_comment then
-    ---------------------------------------------------------------------------
-    -- If nvim-comment is installed, we:
-    --   1. Insert a new, blank line below the current line
-    --   2. Move the cursor to that line
-    --   3. Toggle a line comment there
-    --   4. Append our marker text
-    --   5. Place the cursor in insert mode
-    ---------------------------------------------------------------------------
-    vim.api.nvim_buf_set_lines(buf, row, row, false, { "" })
+  local row, _ = unpack(vim.api.nvim_win_get_cursor(0))
+  if ok then
+    -- Insert blank line and toggle comment
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { '' })
     vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
-
     nvim_comment.comment_toggle_linewise_op()
-
-    local commented_line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
-    commented_line = commented_line .. " " .. marker_text .. " "
-    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { commented_line })
-
-    vim.api.nvim_win_set_cursor(0, { row + 1, #commented_line })
-    vim.cmd("startinsert")
-
+    local commented = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+    commented = commented .. ' ' .. marker_text .. ' '
+    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { commented })
+    vim.api.nvim_win_set_cursor(0, { row + 1, #commented })
+    vim.cmd('startinsert')
   else
-    ---------------------------------------------------------------------------
-    -- Fallback if nvim-comment is NOT installed
-    --   1. Build the comment from vim.bo.commentstring if available, else "// %s"
-    --   2. Insert a new line below the current line
-    --   3. Place the cursor in insert mode after the marker
-    ---------------------------------------------------------------------------
+    -- Fallback using commentstring
     local cstring = vim.bo.commentstring
-    if not cstring or cstring == "" then
-      cstring = "// %s"
+    if not cstring or cstring == '' then
+      cstring = '// %s'
     end
-
-    if cstring:find("%%s") then
-      cstring = cstring:gsub("%%s", marker_text .. " ")
+    if cstring:find('%%s') then
+      cstring = cstring:gsub('%%s', marker_text .. ' ')
     else
-      cstring = cstring .. " " .. marker_text .. " "
+      cstring = cstring .. ' ' .. marker_text .. ' '
     end
-
     vim.api.nvim_buf_set_lines(buf, row, row, false, { cstring })
     vim.api.nvim_win_set_cursor(0, { row + 1, #cstring })
-    vim.cmd("startinsert")
+    vim.cmd('startinsert')
   end
 end
 
---------------------------------------------------------------------------------
--- Auctor Select
---------------------------------------------------------------------------------
-function M.auctor_select()
-  local model = vim.fn.input("Enter model name (e.g. gpt-4, gpt-3.5-turbo, etc.): ")
-  if model and model ~= "" then
-    vim.g.auctor_model = model
-    print("Auctor model set to: " .. model)
-  else
-    print("Model selection canceled or empty.")
-  end
-end
-
---------------------------------------------------------------------------------
--- Auctor AutoAdd Toggle
---------------------------------------------------------------------------------
+--- Toggle the auto-add behaviour. When enabled, Auctor will call
+-- :AuctorAdd automatically on BufReadPost and BufNewFile events.
 function M.auctor_auto_add_toggle()
-  vim.g.auctor_auto_add = not vim.g.auctor_auto_add
-  print("Auctor auto add is now " .. (vim.g.auctor_auto_add and "enabled" or "disabled"))
+  state.opts.auto_add = not state.opts.auto_add
+  util.notify('Auctor auto add is now ' .. (state.opts.auto_add and 'enabled' or 'disabled'), 'info')
 end
 
--- Auto-add on BufReadPost or BufNewFile, if enabled
+--- Conditionally invoke auctor_add() if auto-add is enabled.
 function M.auto_add_if_enabled()
-  if vim.g.auctor_auto_add then
+  if state.opts.auto_add then
     M.auctor_add()
   end
 end
 
-return M
+--- Select a different provider. Prompts the user for a provider name
+-- and sets it active. See :AuctorConfigUI for a UI alternative.
+function M.auctor_use(name)
+  if not name or name == '' then
+    name = vim.fn.input('Enter provider name: ')
+  end
+  if providers.set_active(name) then
+    util.notify('Auctor provider set to: ' .. name, 'info')
+  else
+    util.notify('Unknown provider: ' .. name, 'error')
+  end
+end
 
+--- Abort the currently running API call, if any.
+function M.auctor_abort()
+  if state.current_job then
+    util.cancel_current_job()
+    util.notify('Auctor request aborted.', 'warn')
+  else
+    util.notify('No active Auctor request to abort.', 'info')
+  end
+end
+
+--- Report the current status, including active provider, model and
+-- session cost. The output is printed to the command line.
+function M.auctor_status()
+  local p = providers.get_active()
+  local lines = {}
+  table.insert(lines, 'Auctor Status:')
+  if state.active_provider then
+    table.insert(lines, ' Active provider: ' .. state.active_provider)
+  else
+    table.insert(lines, ' Active provider: default')
+  end
+  if p then
+    table.insert(lines, ' Endpoint: ' .. (p.base_url or ''))
+    table.insert(lines, ' Model: ' .. (p.model or ''))
+    table.insert(lines, ' Temperature: ' .. tostring(p.temperature or ''))
+    table.insert(lines, ' API key env: ' .. (p.api_key_env or ''))
+  end
+  table.insert(lines, string.format(' Session cost: $%.6f', state.session_total_cost))
+  util.notify(table.concat(lines, '\n'), 'info')
+end
+
+return M

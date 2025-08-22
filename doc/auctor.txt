@@ -1,135 +1,77 @@
-*auctor.txt*                 Auctor Plugin Documentation              -*- text -*-
+*auctor.txt*                         Auctor plugin
 
-AUTHOR: Your Name <your.email@example.com>
+Auctor is a Neovim plugin which integrates a configurable LLM to help
+refactor code. It sends selected text to the provider, shows a diff
+preview and then applies the changes on your command.
 
-==============================================================================
-CONTENTS                                                    *auctor-contents*
+                                                       *:AuctorUpdate*
+    :AuctorUpdate              Send the current visual selection to the
+                                model for modification. A diff preview
+                                window is shown; press `y` or `<CR>` to
+                                accept, `n` or `q` to cancel.
 
-1. Introduction.......................|auctor-intro|
-2. Installation.......................|auctor-install|
-3. Configuration......................|auctor-config|
-4. Commands...........................|auctor-commands|
-5. Key Mappings.......................|auctor-keymaps|
-6. Global Variables...................|auctor-globals|
-7. Cost and Pricing...................|auctor-cost|
-8. Automatic Upload...................|auctor-auto-add|
+                                                       *:AuctorAdd*
+    :AuctorAdd                 Upload the entire buffer as context for
+                                future requests. This does not change
+                                any text.
 
-==============================================================================
-1. Introduction                                           *auctor-intro*
+                                                       *:AuctorInsert*
+    :AuctorInsert              Insert an instruction marker comment below
+                                the current line and enter insert mode.
+                                The marker is configurable via
+                                |instruction_marker|.
 
-Auctor is a Neovim plugin that integrates with various AI coding assistants 
-(e.g., OpenAI, Anthropic, Hugging Face, Ollama) to transform selected code 
-snippets or entire buffers. It can send data to the AI API and optionally 
-replace the text in your buffer with the response.
+                                                       *:AuctorAutoAddToggle*
+    :AuctorAutoAddToggle       Toggle automatically calling
+                                `:AuctorAdd` on `BufReadPost` and
+                                `BufNewFile`. The current state is
+                                stored in |auto_add|.
 
-==============================================================================
-2. Installation                                            *auctor-install*
+                                                       *:AuctorUse*
+    :AuctorUse {name}          Switch to the given provider. Provider
+                                definitions are loaded from
+                                `.auctor.toml` or passed via
+                                |providers| at setup time.
 
-Use a plugin manager or install manually.
+                                                       *:AuctorConfigUI*
+    :AuctorConfigUI            Open a floating window listing all
+                                configured providers. From here you can
+                                add, delete, select and save providers.
 
-- Using a plugin manager (e.g. packer):
+                                                       *:AuctorStatus*
+    :AuctorStatus              Show the active provider, model, temperature
+                                and the session cost so far.
 
-    ```lua
-    use {
-      'path/to/auctor.nvim',
-      config = function()
-        -- optional configuration
-      end
-    }
-    ```
+                                                       *:AuctorAbort*
+    :AuctorAbort               Cancel any in‑flight request. Useful if
+                                you accidentally send a large file.
 
-- Manual Installation:
-  Place the `auctor.nvim` directory into:
-  `~/.config/nvim/pack/manual/start/auctor.nvim`
+CONFIGURATION                           *auctor-configuration*
 
-  For more details, see the plugin's README.
+    Use `require('auctor').setup()` to configure the plugin. The
+    following keys are recognised in the options table:
 
-Once installed, restart Neovim and run:
-    :helptags /path/to/auctor.nvim/doc/
-to generate the help tags, then:
-    :help auctor
+    instruction_marker    String inserted by |:AuctorInsert|. Default `|||`.
+    system_update_prompt  System prompt for update operations. If not
+                          provided, a sensible default will be used.
+    system_add_prompt     System prompt for add operations. Defaults to a
+                          brief acknowledgement request.
+    auto_add              Boolean controlling whether buffers are
+                          automatically uploaded on read/new. Default false.
+    providers             Table of provider definitions keyed by name.
 
-==============================================================================
-3. Configuration                                           *auctor-config*
+    Provider definitions have these fields:
 
-Before using Auctor, ensure that:
-- `vim.g.auctor_api_key` is set to your API key if required by your provider.
-- `vim.g.auctor_provider` is set to one of `"openai"`, `"anthropic"`, 
-  `"huggingface"`, or `"ollama"` depending on your AI provider.
+        base_url       The HTTP endpoint for chat completions.
+        model          The model to use (e.g. gpt-4o).
+        temperature    Sampling temperature.
+        api_key_env    Name of the environment variable holding the key.
+        update_prompt  Additional text appended to the system update prompt.
+        add_prompt     Additional text appended to the system add prompt.
 
-You can set these in your `init.lua` or `init.vim`:
-    ```lua
-    vim.g.auctor_api_key = "sk-..."
-    vim.g.auctor_provider = "openai"
-    ```
+    Providers can also be defined in a `.auctor.toml` file located in
+    the working directory or in `$XDG_CONFIG_HOME/auctor/auctor.toml`. See
+    README for an example.
 
-For full details and defaults of global variables, see |auctor-globals|.
-
-==============================================================================
-4. Commands                                                *auctor-commands*
-
-:AuctorUpdate
-    Sends the currently selected text (visual selection) to the configured 
-    AI provider. On the first call per session, a special prompt is prepended.
-    The selection is replaced with the returned text, formatted as a code block.
-    Also prints cost information (if available).
-
-:AuctorAdd
-    Sends the entire current buffer to the AI provider along with a prefix prompt. 
-    Does not replace or modify the buffer. Prints cost information.
-
-:AuctorAutoAddToggle
-    Toggles a mode that automatically calls :AuctorAdd on every new buffer/file 
-    opened.
-
-==============================================================================
-5. Key Mappings                                             *auctor-keymaps*
-
-Here are example key mappings (place in your `init.lua`):
-
-```lua
--- AuctorUpdate on selected text
-vim.api.nvim_set_keymap('v', '<leader>au', ':AuctorUpdate<CR>', { noremap = true, silent = true })
-
--- AuctorAdd current buffer
-vim.api.nvim_set_keymap('n', '<leader>aa', ':AuctorAdd<CR>', { noremap = true, silent = true })
-
--- Toggle auto add
-vim.api.nvim_set_keymap('n', '<leader>at', ':AuctorAutoAddToggle<CR>', { noremap = true, silent = true })
-
--- Insert a comment line starting with instruction marker
-vim.api.nvim_set_keymap('n', '<leader>ic', ':lua vim.fn.append(vim.fn.line("."), vim.g.auctor_instruction_marker .. " ")<CR>jA', { noremap = true, silent = true })
-```
-
-==============================================================================
-6. Global Variables                                         *auctor-globals*
-
-| Global Variable                | Description                                      | Default                         |
-|--------------------------------|--------------------------------------------------|---------------------------------|
-| vim.g.auctor_api_key           | The API key for your provider.                   | None                            |
-| vim.g.auctor_provider          | Provider: "openai", "anthropic", "huggingface", "ollama" | "openai"               |
-| vim.g.auctor_prompt            | Initial prompt for first AuctorUpdate call.       | "Replace text according to..."  |
-| vim.g.auctor_model             | Model name to use (if applicable).               | "gpt-3.5-turbo" (for openai)    |
-| vim.g.auctor_temperature       | Temperature for generation.                      | 0.7                             |
-| vim.g.auctor_auto_add          | Bool: auto run AuctorAdd on new buffer.          | false                           |
-| vim.g.auctor_prefix_prompt_func| Lua function returning prefix prompt.            | Built-in default                |
-| vim.g.auctor_instruction_marker| Marker used for instructions in comments.        | "|||"                           |
-
-To override defaults, set these variables in `init.lua`.
-
-==============================================================================
-7. Cost and Pricing                                           *auctor-cost*
-
-When using OpenAI, Auctor attempts to calculate the cost of each request 
-using known token prices. For other providers, cost calculation is not yet 
-implemented and will show as zero or unknown.
-
-==============================================================================
-8. Automatic Upload                                           *auctor-auto-add*
-
-If `vim.g.auctor_auto_add` is set to `true` or toggled on using 
-`:AuctorAutoAddToggle`, the plugin will automatically send the buffer to the 
-provider on every new file or buffer open.
-
-==============================================================================
-vim:tw=78:ts=8:ft=help:norl:
+SEE ALSO
+    README.md for a high-level overview.
