@@ -1,3 +1,4 @@
+-- FILE: lua/auctor/util.lua
 -- Utility functions for Auctor. These helpers handle reading and
 -- replacing visual selections, performing HTTP requests via curl,
 -- computing token costs and displaying notifications. All mutable
@@ -21,8 +22,6 @@ local M = {}
 -- @return table start_pos: {line0, col0}
 -- @return table end_pos: {line0, col0}
 function M.get_visual_selection()
-  -- Save the current mode and exit to normal mode to capture marks
-  local orig_mode = vim.api.nvim_get_mode().mode
   -- Getpos returns {bufnum, lnum, col, off}
   local _, ls, cs = unpack(vim.fn.getpos("'<"))
   local _, le, ce = unpack(vim.fn.getpos("'>"))
@@ -84,12 +83,16 @@ end
 
 --- Perform an asynchronous HTTP POST to the active provider's endpoint.
 -- The job handle is stored in state.current_job so it can be cancelled.
+-- IMPORTANT: the user callback is *scheduled* onto the main loop to
+-- avoid E5560 (UI calls inside libuv callbacks).
 -- @param messages table list of chat messages
--- @param callback function(resp, err) called when the request finishes
+-- @param callback function(resp, err) called on completion
 function M.call_api_async(messages, callback)
   local provider = providers.get_active()
   if not provider then
-    callback(nil, 'No active provider')
+    vim.schedule(function()
+      callback(nil, 'No active provider')
+    end)
     return
   end
   -- Build request body
@@ -99,7 +102,6 @@ function M.call_api_async(messages, callback)
     temperature = provider.temperature,
   }
   local ok, json
-  -- Prefer vim.json.encode if available (NVIM 0.10+)
   if vim.json and vim.json.encode then
     ok, json = pcall(vim.json.encode, body)
   end
@@ -107,43 +109,47 @@ function M.call_api_async(messages, callback)
     json = vim.fn.json_encode(body)
   end
   -- Build command
-  local cmd = { 'curl', '-sS', '-X', 'POST', provider.base_url }
+  local cmd = { 'curl', '-sS', '-X', 'POST', provider.base_url, '--max-time', '60' }
   -- Prepare headers
-  local headers = {}
-  table.insert(headers, '-H')
-  table.insert(headers, 'Content-Type: application/json')
+  local function add_header(k, v)
+    table.insert(cmd, '-H'); table.insert(cmd, string.format('%s: %s', k, v))
+  end
+  add_header('Content-Type', 'application/json')
   if provider.api_key_env then
     local key = os.getenv(provider.api_key_env)
     if not key or key == '' then
-      callback(nil, string.format('Environment variable %s is not set', provider.api_key_env))
+      vim.schedule(function()
+        callback(nil, string.format('Environment variable %s is not set', provider.api_key_env))
+      end)
       return
     end
-    table.insert(headers, '-H')
-    table.insert(headers, 'Authorization: Bearer ' .. key)
+    add_header('Authorization', 'Bearer ' .. key)
   end
   if provider.headers then
     for k, v in pairs(provider.headers) do
-      table.insert(headers, '-H')
-      table.insert(headers, string.format('%s: %s', k, v))
+      add_header(k, v)
     end
-  end
-  for _, h in ipairs(headers) do
-    table.insert(cmd, h)
   end
   -- Payload
-  table.insert(cmd, '-d')
-  table.insert(cmd, json)
-  -- Start the process
+  table.insert(cmd, '-d'); table.insert(cmd, json)
+
   local handle
   handle = vim.system(cmd, { text = true }, function(obj)
-    -- Clear current job handle
-    if state.current_job == handle then
-      state.current_job = nil
+    -- Ensure callback runs on the main thread
+    local function done(resp, err)
+      vim.schedule(function()
+        -- Clear tracked handle when delivering result
+        if state.current_job == handle then
+          state.current_job = nil
+        end
+        callback(resp, err)
+      end)
     end
+
     if obj.code ~= 0 then
-      callback(nil, 'HTTP request failed: ' .. tostring(obj.stderr or ''))
-      return
+      return done(nil, 'HTTP request failed: ' .. tostring(obj.stderr or ''))
     end
+
     local raw = obj.stdout or ''
     local ok2, decoded = pcall(function()
       if vim.json and vim.json.decode then
@@ -153,20 +159,21 @@ function M.call_api_async(messages, callback)
       end
     end)
     if not ok2 then
-      callback(nil, 'Failed to decode JSON: ' .. tostring(decoded))
-      return
+      return done(nil, 'Failed to decode JSON: ' .. tostring(decoded))
     end
     if decoded and decoded.error then
       local err = decoded.error.message or 'Unknown API error'
-      callback(nil, err)
-      return
+      return done(nil, err)
     end
-    callback(decoded, nil)
+    return done(decoded, nil)
   end)
+
   if handle then
     state.current_job = handle
   else
-    callback(nil, 'Failed to start curl process')
+    vim.schedule(function()
+      callback(nil, 'Failed to start curl process')
+    end)
   end
 end
 
@@ -174,8 +181,7 @@ end
 function M.cancel_current_job()
   local job = state.current_job
   if job and type(job) == 'userdata' and job.is_closing == nil then
-    -- kill with SIGTERM; ignore errors
-    pcall(job.kill, job, 15)
+    pcall(job.kill, job, 15) -- SIGTERM
     state.current_job = nil
   end
 end
@@ -185,11 +191,7 @@ end
 --------------------------------------------------------------------------------
 
 --- Compute the estimated cost of an API call based on token usage.
--- Costs are derived from OpenAI GPT-4o pricing as a baseline. This
--- function ignores the provider and may be adjusted in the future to
--- support provider-specific pricing.
--- @param usage table usage.prompt_tokens and usage.completion_tokens
--- @return number cost in dollars
+-- Costs are derived from OpenAI GPT-4o pricing as a baseline.
 function M.calculate_cost(usage)
   local prompt_tokens = (usage and usage.prompt_tokens) or 0
   local completion_tokens = (usage and usage.completion_tokens) or 0
@@ -198,9 +200,6 @@ end
 
 --- Compute a unified diff between two strings. Returns nil if the
 -- built-in vim.diff is unavailable (prior to Neovim 0.10).
--- @param orig string original text
--- @param new string new text
--- @return string|nil unified diff
 function M.diff_unified(orig, new)
   if not vim.diff then
     return nil
@@ -210,17 +209,11 @@ end
 
 --- Display a notification. Uses vim.notify if available, otherwise
 -- falls back to print(). Accepts the same interface as vim.notify.
--- @param msg string message to display
--- @param level string notification level: info, warn, or error
--- @param opts table additional options passed to vim.notify
 function M.notify(msg, level, opts)
   level = level or 'info'
   if vim.notify then
-    -- Ensure a title is always provided for clarity
     local o = opts or {}
-    if not o.title then
-      o.title = 'Auctor'
-    end
+    if not o.title then o.title = 'Auctor' end
     vim.notify(msg, level, o)
   else
     print(msg)
